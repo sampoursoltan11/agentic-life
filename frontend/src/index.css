@@ -1,0 +1,113 @@
+/* Design tokens.
+   UI chrome is playful (Sims-like sky/grass); chart colors (blue/red bars,
+   orange meters, status colors) stay on a validated accessible palette. */
+:root {
+  --page: #ddeefa;
+  --page-2: #e9f6e6;
+  --surface: #ffffff;
+  --surface-2: #f1f4ee;
+  --ink: #1d2433;
+  --ink-2: #4c5566;
+  --muted: #8a93a3;
+  --grid: #e3e7e0;
+  --border: rgba(29, 36, 51, 0.1);
+
+  --grass: #b5dea2;
+  --grass-2: #9ed189;
+  --path: #d9c9a3;
+  --plumbob: #35d24a;
+
+  /* chart / status colors — validated palette, do not restyle */
+  --blue: #2a78d6;
+  --orange: #eb6834;
+  --red: #e34948;
+  --violet: #4a3aa7;
+  --good: #006300;
+  --critical: #d03b3b;
+  --warning: #fab219;
+
+  /* UI accent tints (decorative, always paired with icon + label) */
+  --tint-move: #2a78d6;
+  --tint-speak: #1d9e58;
+  --tint-act: #c97a16;
+
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --round: ui-rounded, "SF Pro Rounded", "Comic Neue", var(--sans);
+  --mono: ui-monospace, "SF Mono", Consolas, monospace;
+
+  font: 15px/1.5 var(--sans);
+  color-scheme: light dark;
+  color: var(--ink-2);
+  background: var(--page);
+  -webkit-font-smoothing: antialiased;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --page: #10182a;
+    --page-2: #101f1a;
+    --surface: #1b2334;
+    --surface-2: #242e42;
+    --ink: #f2f5fa;
+    --ink-2: #c0c8d6;
+    --muted: #8a93a3;
+    --grid: #2e3850;
+    --border: rgba(255, 255, 255, 0.12);
+
+    --grass: #23402a;
+    --grass-2: #1c3522;
+    --path: #57503c;
+    --plumbob: #3ddc55;
+
+    --blue: #3987e5;
+    --orange: #d95926;
+    --red: #e66767;
+    --violet: #9085e9;
+    --good: #0ca30c;
+
+    --tint-move: #5ea3f0;
+    --tint-speak: #4cc98a;
+    --tint-act: #e8a84f;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: linear-gradient(160deg, var(--page) 0%, var(--page-2) 100%) fixed;
+}
+
+h1,
+h2,
+h3 {
+  color: var(--ink);
+  font-family: var(--round);
+  font-weight: 700;
+  margin: 0 0 0.5em;
+}
+
+ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+button {
+  font: inherit;
+  cursor: pointer;
+  border: none;
+  background: none;
+  color: inherit;
+  padding: 0;
+}
+
+code {
+  font-family: var(--mono);
+  font-size: 0.85em;
+  background: var(--surface-2);
+  padding: 1px 5px;
+  border-radius: 4px;
+}

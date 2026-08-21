@@ -1,0 +1,22 @@
+# Secrets / local config
+.env
+.env.local
+*.local.yaml
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# Node (frontend has its own .gitignore too)
+node_modules/
+dist/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/

@@ -1,0 +1,68 @@
+# The world map: a small town laid out on a grid.
+#
+# Each location has:
+#   label     - display name shown in the UI
+#   x, y      - grid coordinates for the map view
+#   connects  - which locations an agent can reach from here (informational;
+#               movement is currently allowed between any two locations)
+#
+# Add a new location by adding an entry here and restarting the backend.
+# Personas reference these ids in their `home_location` field.
+
+locations:
+  town_square:
+    label: Town Square
+    icon: "⛲"
+    color: "#54c2dd"
+    x: 2
+    y: 3
+    connects: [town_hall, bakery, workshop, clinic, general_store, garden, tavern]
+  town_hall:
+    label: Town Hall
+    icon: "🏛️"
+    color: "#6f8ff7"
+    x: 2
+    y: 1
+    connects: [town_square]
+  bakery:
+    label: Bakery
+    icon: "🥐"
+    color: "#f5a623"
+    x: 0
+    y: 2
+    connects: [town_square]
+  workshop:
+    label: Workshop
+    icon: "🛠️"
+    color: "#f98d4b"
+    x: 4
+    y: 2
+    connects: [town_square]
+  clinic:
+    label: Clinic
+    icon: "🏥"
+    color: "#f77fa2"
+    x: 0
+    y: 4
+    connects: [town_square]
+  general_store:
+    label: General Store
+    icon: "🛒"
+    color: "#b78ef5"
+    x: 4
+    y: 4
+    connects: [town_square]
+  garden:
+    label: Garden
+    icon: "🌿"
+    color: "#67c96b"
+    x: 2
+    y: 5
+    connects: [town_square]
+  tavern:
+    label: Tavern
+    icon: "🍺"
+    color: "#d9975e"
+    x: 3
+    y: 4
+    connects: [town_square]
