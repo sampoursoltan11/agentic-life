@@ -35,6 +35,18 @@ export type SimStateMessage = {
   tick: number;
 };
 
+/** Broadcast every tick so the HUD clock keeps moving even when no one acts
+ * (e.g. the whole town asleep, fast-forwarding through the night). */
+export type TickMessage = {
+  type: "tick";
+  tick: number;
+  day: number;
+  time: string;
+  phase: "morning" | "afternoon" | "evening" | "night";
+  sleeping: string[];
+  fast_forward: boolean;
+};
+
 export type ActionMessage = {
   type: "action" | "policy_violation";
   tick: number;
@@ -74,6 +86,7 @@ export type WorldMessage =
   | ActionMessage
   | ReflectionMessage
   | SimStateMessage
+  | TickMessage
   | TownDecisionMessage;
 
 /** Messages that appear in the event feed (world_init is state, not an event). */

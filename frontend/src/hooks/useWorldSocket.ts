@@ -10,6 +10,7 @@ export type WorldSnapshot = {
   runId: number | null;
   paused: boolean;
   sleeping: string[];
+  fastForward: boolean; // whole town asleep: the night is being fast-forwarded
   locations: Record<string, Location>;
   positions: Record<string, string>;
 };
@@ -68,6 +69,7 @@ export function useWorldSocket(maxEvents = 250) {
             runId,
             paused: msg.paused ?? false,
             sleeping: msg.sleeping ?? [],
+            fastForward: false,
             locations: msg.locations,
             positions: msg.positions,
           });
@@ -75,6 +77,14 @@ export function useWorldSocket(maxEvents = 250) {
         }
         if (msg.type === "sim_state") {
           setWorld((prev) => (prev ? { ...prev, paused: msg.paused } : prev));
+          return;
+        }
+        if (msg.type === "tick") {
+          setWorld((prev) =>
+            prev
+              ? { ...prev, tick: msg.tick, sleeping: msg.sleeping, fastForward: msg.fast_forward }
+              : prev
+          );
           return;
         }
         if (msg.type === "action" || msg.type === "policy_violation") {

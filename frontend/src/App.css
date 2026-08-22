@@ -73,6 +73,59 @@
   font-variant-numeric: tabular-nums;
 }
 
+.hud__phase {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 2px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--ink-2);
+  background: var(--surface);
+}
+
+.hud__phase--morning {
+  color: #b07f18;
+  border-color: color-mix(in oklab, #e8b04a 50%, var(--surface));
+  background: color-mix(in oklab, #e8b04a 14%, var(--surface));
+}
+
+.hud__phase--afternoon {
+  color: #b06a10;
+  border-color: color-mix(in oklab, #f5a623 50%, var(--surface));
+  background: color-mix(in oklab, #f5a623 12%, var(--surface));
+}
+
+.hud__phase--evening {
+  color: #b3542e;
+  border-color: color-mix(in oklab, #ff843c 45%, var(--surface));
+  background: color-mix(in oklab, #ff843c 14%, var(--surface));
+}
+
+.hud__phase--night {
+  color: #5d6cc9;
+  border-color: color-mix(in oklab, #4a5ac9 45%, var(--surface));
+  background: color-mix(in oklab, #4a5ac9 14%, var(--surface));
+}
+
+.hud__ff {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: #5d6cc9;
+  animation: ffpulse 1.2s ease-in-out infinite;
+  white-space: nowrap;
+}
+
+@keyframes ffpulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hud__ff { animation: none; }
+}
+
 .hud__status {
   display: flex;
   align-items: center;

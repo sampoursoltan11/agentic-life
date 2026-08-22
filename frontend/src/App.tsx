@@ -22,7 +22,8 @@ function worldClock(tick: number) {
   const mm = total % 60;
   // Phases mirror the backend's world_clock (agents perceive the same time).
   const phase = hh >= 6 && hh < 12 ? "morning" : hh >= 12 && hh < 18 ? "afternoon" : hh >= 18 && hh < 22 ? "evening" : "night";
-  const icon = phase === "night" ? "🌙" : phase === "evening" ? "🌇" : "☀️";
+  const icon =
+    phase === "night" ? "🌙" : phase === "evening" ? "🌇" : phase === "afternoon" ? "🌤️" : "🌅";
   return {
     day,
     time: `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`,
@@ -68,6 +69,12 @@ function App() {
             {clock.icon} Day {clock.day}
           </span>
           <span className="hud__time">{clock.time}</span>
+          <span className={`hud__phase hud__phase--${clock.phase}`}>{clock.phase}</span>
+          {world?.fastForward && (
+            <span className="hud__ff" title="Everyone is asleep — the night passes quickly">
+              ⏩ town asleep
+            </span>
+          )}
         </div>
         <div className="hud__status">
           {world?.runId != null && <span className="hud__life">Life #{world.runId}</span>}
@@ -101,7 +108,7 @@ function App() {
           <div className="hud__progress" key={world.tick}>
             <div
               className="hud__progress-fill"
-              style={{ animationDuration: `${world.tickSeconds}s` }}
+              style={{ animationDuration: `${world.fastForward ? 0.3 : world.tickSeconds}s` }}
             />
           </div>
         )}

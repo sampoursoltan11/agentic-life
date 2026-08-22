@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     embedding_model: str = "text-embedding-3-small"
     judge_model: str = "openai/gpt-4o-mini"
     tick_seconds: float = 6.0
+    # Wall-clock pace while EVERY citizen is asleep: the night fast-forwards
+    # (sleeping citizens make no LLM calls, so these ticks are nearly free).
+    night_tick_seconds: float = 0.3
     personas_dir: str = "personas"
     constitution_path: str = "config/constitution.yaml"
     world_path: str = "config/world.yaml"

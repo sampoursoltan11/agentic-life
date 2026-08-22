@@ -139,7 +139,12 @@ class Simulation:
                 await asyncio.sleep(0.5)
                 continue
             await self.step()
-            await asyncio.sleep(self.settings.tick_seconds)
+            # When the whole town is asleep the night fast-forwards: nothing
+            # can happen, so there's no reason to wait out full-length ticks.
+            await asyncio.sleep(
+                self.settings.night_tick_seconds if self._all_asleep()
+                else self.settings.tick_seconds
+            )
 
     def stop(self) -> None:
         self._running = False
@@ -189,6 +194,9 @@ class Simulation:
 
     def _private_location(self) -> str | None:
         return next((lid for lid, loc in self.world.locations.items() if loc.get("private")), None)
+
+    def _all_asleep(self) -> bool:
+        return bool(self.agents) and all(a in self.sleeping for a in self.agents)
 
     def _schedule(self, coro) -> None:
         task = asyncio.create_task(coro)
@@ -273,9 +281,20 @@ class Simulation:
         )
 
         if self.world.tick % REFLECTION_INTERVAL_TICKS == 0:
+            # Sleeping citizens don't reflect: no new memories form overnight,
+            # and skipping them keeps fast-forwarded nights free of LLM calls.
             await asyncio.gather(
-                *(self._reflect_agent_safe(agent_id, agent) for agent_id, agent in self.agents.items())
+                *(self._reflect_agent_safe(agent_id, agent)
+                  for agent_id, agent in self.agents.items() if agent_id not in self.sleeping)
             )
+
+        # The clock always reaches the UI, even on ticks where no one acts
+        # (e.g. the whole town asleep) - otherwise the HUD freezes overnight.
+        await manager.broadcast({
+            "type": "tick", "tick": self.world.tick, **world_clock(self.world.tick),
+            "sleeping": sorted(self.sleeping.keys()),
+            "fast_forward": self._all_asleep(),
+        })
 
     async def _close_proposals(self) -> None:
         try:
