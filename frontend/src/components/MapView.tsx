@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Agent, WorldEvent } from "../types";
 import type { WorldSnapshot } from "../hooks/useWorldSocket";
-import { Building } from "./buildings";
+import { Building, Decor } from "./buildings";
 
 const CELL_W = 200;
 const CELL_H = 198;
@@ -12,7 +12,7 @@ const TOKEN = 44;
 const PAD_TOP = 96; // headroom so speech bubbles above the top row stay visible
 const WALK_MS = 2600; // must match the CSS left/top transition duration
 
-const ACTION_BADGE: Record<string, string> = { move: "🚶", speak: "💬", act: "🎬" };
+const ACTION_BADGE: Record<string, string> = { move: "🚶", speak: "💬", act: "🎬", sleep: "😴", wake: "🌅" };
 
 type Props = {
   world: WorldSnapshot | null;
@@ -104,15 +104,28 @@ export function MapView({ world, agents, events, selectedAgentId, onSelectAgent 
   for (const agentId of Object.keys(world.positions).sort()) {
     (occupants[world.positions[agentId]] ??= []).push(agentId);
   }
-  // Tokens stand in the yard in front of their building (extra rows spill
-  // further down toward the road); position changes animate, so citizens
-  // visibly walk door-to-door along the roads.
+  // Awake tokens stand in the yard in front of their building. At the private
+  // Residences everyone is indoors, so all occupants tuck INTO the cottages
+  // as a compact grid - a full night's crowd never spills over the neighbours.
+  // Position changes animate, so citizens visibly walk along the roads.
+  const isIndoor = (agentId: string) =>
+    world.locations[world.positions[agentId]]?.private || world.sleeping.includes(agentId);
   const tokenPos = (agentId: string) => {
     const locId = world.positions[agentId];
-    const slot = (occupants[locId] ?? []).indexOf(agentId);
+    const here = occupants[locId] ?? [];
+    const plot = plotPos(locId);
+    if (isIndoor(agentId)) {
+      const indoors = here.filter(isIndoor);
+      const slot = indoors.indexOf(agentId);
+      return {
+        left: plot.left + 16 + (slot % 5) * 32,
+        top: plot.top + 30 + Math.floor(slot / 5) * 32,
+      };
+    }
+    const awake = here.filter((a) => !isIndoor(a));
+    const slot = awake.indexOf(agentId);
     const col = slot % 3;
     const row = Math.floor(slot / 3);
-    const plot = plotPos(locId);
     return {
       left: plot.left + 12 + col * (TOKEN + 14),
       top: plot.top + BUILDING_H + 24 + row * (TOKEN + 24),
@@ -136,15 +149,33 @@ export function MapView({ world, agents, events, selectedAgentId, onSelectAgent 
   const width = cols * CELL_W + 20;
   const height = rows * CELL_H + PAD_TOP + 10;
 
+  // Nature fills the cells no building occupies.
+  const occupied = new Set(locations.map(([, l]) => `${l.x - minX},${l.y - minY}`));
+  const emptyCells: { gx: number; gy: number }[] = [];
+  for (let gx = 0; gx < cols; gx++) {
+    for (let gy = 0; gy < rows; gy++) {
+      if (!occupied.has(`${gx},${gy}`)) emptyCells.push({ gx, gy });
+    }
+  }
+
   return (
     <div className="map-scroll">
       <div className="map" style={{ width, height }}>
         <svg className="map__roads" width={width} height={height} aria-hidden="true">
           {roads.map((r, i) => (
             <g key={i}>
+              <line className="road-casing" x1={r.x1} y1={r.y1} x2={r.x2} y2={r.y2} />
               <line className="road" x1={r.x1} y1={r.y1} x2={r.x2} y2={r.y2} />
               <line className="road-dash" x1={r.x1} y1={r.y1} x2={r.x2} y2={r.y2} />
             </g>
+          ))}
+          {emptyCells.map(({ gx, gy }) => (
+            <Decor
+              key={`decor-${gx}-${gy}`}
+              x={gx * CELL_W + 10}
+              y={gy * CELL_H + PAD_TOP}
+              variant={gx + gy * 3}
+            />
           ))}
         </svg>
 
@@ -168,25 +199,29 @@ export function MapView({ world, agents, events, selectedAgentId, onSelectAgent 
           const agent = agentById[agentId];
           const pos = tokenPos(agentId);
           const action = acting.get(agentId);
+          const asleep = world.sleeping.includes(agentId);
           const classes = [
             "token",
             selectedAgentId === agentId ? "token--selected" : "",
             blocked.has(agentId) ? "token--blocked" : "",
             walking.has(agentId) ? "token--walking" : "",
+            asleep ? "token--sleeping" : "",
+            isIndoor(agentId) ? "token--indoor" : "",
           ].join(" ");
           return (
             <button
               key={agentId}
               className={classes}
               style={pos}
-              title={`${agent?.name ?? agentId} — ${agent?.role ?? ""}`}
+              title={`${agent?.name ?? agentId} — ${asleep ? "asleep at home" : agent?.role ?? ""}`}
               onClick={() => onSelectAgent(agentId)}
             >
               {selectedAgentId === agentId && <span className="plumbob" aria-hidden="true" />}
               <span className="token__avatar">{agent?.avatar ?? "🙂"}</span>
               <span className="token__name">{(agent?.name ?? agentId).split(" ")[0]}</span>
-              {walking.has(agentId) && <span className="token__badge token__badge--action">🚶</span>}
-              {!walking.has(agentId) && action && !blocked.has(agentId) && (
+              {asleep && <span className="token__badge token__badge--sleep">💤</span>}
+              {!asleep && walking.has(agentId) && <span className="token__badge token__badge--action">🚶</span>}
+              {!asleep && !walking.has(agentId) && action && !blocked.has(agentId) && (
                 <span className="token__badge token__badge--action">{ACTION_BADGE[action] ?? "🎬"}</span>
               )}
               {blocked.has(agentId) && <span className="token__badge token__badge--blocked">🚫</span>}

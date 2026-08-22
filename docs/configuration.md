@@ -102,6 +102,10 @@ locations:
     connects: [tavern]   # drawn as paths on the map (movement is unrestricted for now)
 ```
 
+A location with `private: true` (the Residences) gives full seclusion:
+citizens there are unseen and unhearable by other citizens, and speech doesn't
+reach them — it's where citizens choose to go for privacy or sleep.
+
 Add locations freely; agents are told the full list of location ids they can
 move to each tick. Requires a backend restart. Locations are validated at
 startup (missing fields or `connects` pointing at unknown locations fail

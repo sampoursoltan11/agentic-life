@@ -24,6 +24,14 @@ locations:
     x: 2
     y: 1
     connects: [town_square]
+  residences:
+    label: Residences
+    icon: "🏡"
+    color: "#e8b04a"
+    x: 4
+    y: 1
+    connects: [town_square]
+    private: true   # citizens here are secluded: unseen, unheard, undisturbed
   bakery:
     label: Bakery
     icon: "🥐"

@@ -29,6 +29,64 @@ old run's complete history stays in the database — nothing is ever deleted.
 This makes between-run comparisons the natural experiment unit: change the
 constitution or a citizen's model, start a new life, and diff the two runs.
 
+## Key moments (LLM-curated)
+
+The **⭐ Key moments** panel on the main page shows the notable happenings of
+the current life: rule/judgement moments (⚖️), social milestones (🤝), and
+personal milestones (🌱), each with a significance rating and the citizens
+involved. Method, for the write-up: a curator model (the judge model, not any
+citizen's) reads one completed in-world day's full event record and picks 3-8
+moments; curation runs **once per (life, day)** — automatically when a day
+ends — and the picks are persisted to `key_moments`, so the record is stable
+rather than re-rolled on every view. Every proposed moment is validated
+against the actual record (tick must exist in the day, citizens must be real)
+before storage. Backfill past days or lives with the panel's button or:
+
+```bash
+curl -X POST "localhost:8000/api/runs/2/moments/curate?day_from=1&day_to=2"
+curl "localhost:8000/api/runs/2/moments"          # read them
+```
+
+Extracts include the range's key moments (JSON `key_moments` + a chronicle
+section). Re-curation requires an explicit `force=true`.
+
+## Privacy: the Residences
+
+The `residences` location is marked `private: true` in `config/world.yaml`.
+Citizens go there **by their own choice** — for privacy, to be alone, or to
+sleep (resting at night is presented as normal, never forced). While there:
+other citizens can't see, hear, or speak to them, and they hear nothing.
+A citizen who chooses the `sleep` action heads home and **skips all turns
+(zero LLM calls) until 06:00**. Privacy is from other citizens only — the
+researcher still sees everything: home actions, sleep/wake events (😴/🌅),
+and memories all appear in the feed, memory streams, and extracts.
+
+## Day-range extraction
+
+The deepest analysis tool: extract everything that happened in a life between
+two in-world days (📊 **Extract** in the HUD, or the API):
+
+```bash
+# structured JSON: day timeline + per-citizen views + bond evolution
+curl "localhost:8000/api/runs/2/extract?day_from=3&day_to=7" > days3-7.json
+# readable Markdown chronicle of the same range
+curl "localhost:8000/api/runs/2/extract?day_from=3&day_to=7&format=report" > days3-7.md
+```
+
+The JSON contains: `timeline` (day → chronological events with each actor's
+private thinking, judge verdicts on blocked actions, in-world clock times),
+`by_citizen` (each citizen's spoken lines, moves, deeds, blocked actions,
+reflections, memories, reward total, and end-of-range bonds), `bonds`
+(start/end affinity per pair plus every change in between), and per-day
+summary counts. The chronicle renders the same range as a readable day-by-day
+story with per-citizen and bond-evolution sections.
+
+Notes: one in-world day = 72 ticks (20 min/tick from 08:00). Events, memories,
+judgements, and bond changes are tick-stamped as they happen; rows from lives
+recorded before tick-stamping existed can't be day-filtered and are reported
+as excluded rather than silently dropped. Bond *evolution* is recorded from
+the same point onward (`relationship_events`).
+
 ## What is captured
 
 Every tick, for every agent:

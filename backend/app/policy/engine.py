@@ -52,7 +52,7 @@ class PolicyEngine:
     REPEAT_MULTIPLIER_STEP = 0.5
     REPEAT_MULTIPLIER_CAP = 3.0
 
-    async def evaluate(self, agent_id: str, action_description: str) -> Verdict:
+    async def evaluate(self, agent_id: str, action_description: str, tick: int | None = None) -> Verdict:
         result = await chat_json(
             get_settings().judge_model,
             "You are the judge of a simulated society, and you enforce its constitution "
@@ -80,7 +80,7 @@ class PolicyEngine:
                           "never applied without an explicit ruling.",
                 reward_delta=self.reward_cfg.get("violation_base", -1),
             )
-            await self._log(agent_id, action_description, verdict)
+            await self._log(agent_id, action_description, verdict, tick)
             return verdict
 
         allowed = result["allowed"]
@@ -100,7 +100,7 @@ class PolicyEngine:
                 reasoning += f" (repeat offence: penalty ×{multiplier:g})"
 
         verdict = Verdict(allowed=allowed, rule_id=rule_id, reasoning=reasoning, reward_delta=reward)
-        await self._log(agent_id, action_description, verdict)
+        await self._log(agent_id, action_description, verdict, tick)
         return verdict
 
     async def _repeat_multiplier(self, agent_id: str, rule_id: str | None) -> float:
@@ -117,13 +117,14 @@ class PolicyEngine:
         )
         return min(self.REPEAT_MULTIPLIER_CAP, 1 + self.REPEAT_MULTIPLIER_STEP * prior)
 
-    async def _log(self, agent_id: str, action: str, verdict: Verdict) -> None:
+    async def _log(self, agent_id: str, action: str, verdict: Verdict, tick: int | None) -> None:
         pool = get_pool()
         await pool.execute(
             """
-            INSERT INTO policy_events (run_id, agent_id, action, allowed, rule_id, reasoning, reward_delta)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            INSERT INTO policy_events (run_id, tick, agent_id, action, allowed, rule_id,
+                                       reasoning, reward_delta)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
             """,
-            get_current_run_id(), agent_id, action, verdict.allowed,
-            verdict.rule_id, verdict.reasoning, verdict.reward_delta,
+            get_current_run_id(), tick, agent_id, action,
+            verdict.allowed, verdict.rule_id, verdict.reasoning, verdict.reward_delta,
         )

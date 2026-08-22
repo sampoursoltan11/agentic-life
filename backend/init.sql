@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS memories (
     id              BIGSERIAL PRIMARY KEY,
     run_id          BIGINT NOT NULL REFERENCES runs(id),
     agent_id        TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    tick            BIGINT,                               -- in-world tick when formed
     kind            TEXT NOT NULL DEFAULT 'observation', -- observation | reflection | plan
     content         TEXT NOT NULL,
     importance      SMALLINT NOT NULL DEFAULT 1,          -- 1-10, scored by LLM
@@ -45,6 +46,7 @@ CREATE INDEX IF NOT EXISTS memories_agent_idx ON memories (run_id, agent_id);
 CREATE TABLE IF NOT EXISTS policy_events (
     id              BIGSERIAL PRIMARY KEY,
     run_id          BIGINT NOT NULL REFERENCES runs(id),
+    tick            BIGINT,                               -- in-world tick of the judgement
     agent_id        TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
     action          TEXT NOT NULL,
     allowed         BOOLEAN NOT NULL,
@@ -82,3 +84,37 @@ CREATE INDEX IF NOT EXISTS world_events_tick_idx ON world_events (run_id, tick);
 -- Semantic search over each agent's whole memory stream (see memory/store.py).
 CREATE INDEX IF NOT EXISTS memories_embedding_idx
     ON memories USING hnsw (embedding vector_cosine_ops);
+
+-- Bond evolution: one row per affinity change, so extracts can show how
+-- relationships developed over any day range (relationships holds only the
+-- current value).
+CREATE TABLE IF NOT EXISTS relationship_events (
+    id              BIGSERIAL PRIMARY KEY,
+    run_id          BIGINT NOT NULL REFERENCES runs(id),
+    tick            BIGINT NOT NULL,
+    agent_a         TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    agent_b         TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    delta           REAL NOT NULL,
+    affinity        REAL NOT NULL,  -- value after this change
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS relationship_events_run_idx ON relationship_events (run_id, tick);
+
+-- LLM-curated "key moments": once per (run, day) a curator model reads the
+-- day's events and picks the notable ones. Persisted so the research record
+-- is stable - curation happens once, not on every view.
+CREATE TABLE IF NOT EXISTS key_moments (
+    id              BIGSERIAL PRIMARY KEY,
+    run_id          BIGINT NOT NULL REFERENCES runs(id),
+    day             INT NOT NULL,
+    tick            BIGINT NOT NULL,
+    category        TEXT NOT NULL,          -- rule | social | personal
+    title           TEXT NOT NULL,
+    description     TEXT NOT NULL,
+    citizens        TEXT[] NOT NULL DEFAULT '{}',
+    significance    SMALLINT NOT NULL DEFAULT 3,  -- 1-5
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS key_moments_run_day_idx ON key_moments (run_id, day);

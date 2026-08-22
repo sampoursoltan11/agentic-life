@@ -33,13 +33,16 @@ async def chat(model: str, system: str, user: str, *, temperature: float = 0.7, 
     return response.choices[0].message["content"].strip()
 
 
-async def chat_json(model: str, system: str, user: str, *, temperature: float = 0.3) -> dict:
+async def chat_json(
+    model: str, system: str, user: str, *, temperature: float = 0.3, max_tokens: int = 400
+) -> dict:
     """Chat completion that asks for and parses a JSON object response."""
     raw = await chat(
         model,
         system + "\nRespond with a single valid JSON object only, no prose, no markdown fences.",
         user,
         temperature=temperature,
+        max_tokens=max_tokens,
     )
     return extract_json_object(raw)
 

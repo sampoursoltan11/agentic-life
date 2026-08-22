@@ -36,22 +36,23 @@ async def score_importance(model: str, content: str) -> int:
 
 async def add_memory(
     agent_id: str, content: str, model: str, kind: str = "observation",
-    importance: int | None = None,
+    importance: int | None = None, tick: int | None = None,
 ) -> int:
     """Store one memory. If `importance` is not given, the agent's own model
     scores it (an extra LLM call) - pass a fixed value for bulk/ambient
-    observations like overheard speech to keep cost down."""
+    observations like overheard speech to keep cost down. `tick` stamps the
+    in-world moment the memory formed (used by day-range extraction)."""
     if importance is None:
         importance = await score_importance(model, content)
     vector = await embed(content)
     pool = get_pool()
     row = await pool.fetchrow(
         """
-        INSERT INTO memories (run_id, agent_id, kind, content, importance, embedding)
-        VALUES ($1, $2, $3, $4, $5, $6)
+        INSERT INTO memories (run_id, tick, agent_id, kind, content, importance, embedding)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
         RETURNING id
         """,
-        get_current_run_id(), agent_id, kind, content, importance,
+        get_current_run_id(), tick, agent_id, kind, content, importance,
         np.array(vector, dtype=np.float32),
     )
     return row["id"]
@@ -93,7 +94,7 @@ async def retrieve_relevant(agent_id: str, query: str, k: int = 8) -> list[dict]
     return [{"id": row["id"], "content": row["content"], "importance": row["importance"]} for _, row in top]
 
 
-async def reflect(agent_id: str, model: str) -> str | None:
+async def reflect(agent_id: str, model: str, tick: int | None = None) -> str | None:
     """Synthesize a higher-level insight from recent memories (Smallville reflection trees)."""
     pool = get_pool()
     rows = await pool.fetch(
@@ -130,5 +131,5 @@ async def reflect(agent_id: str, model: str) -> str | None:
         f"Recent memories:\n{memory_text}\n\n{reward_text}\n\nWhat insight do you draw from these?",
         temperature=0.5,
     )
-    await add_memory(agent_id, insight, model, kind="reflection")
+    await add_memory(agent_id, insight, model, kind="reflection", tick=tick)
     return insight

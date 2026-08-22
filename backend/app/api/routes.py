@@ -1,8 +1,13 @@
 import json
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import JSONResponse, PlainTextResponse
 
+from app.analysis.chronicle import render_chronicle
+from app.analysis.extract import extract_range
+from app.analysis.moments import curate_day
 from app.db import get_pool
+from app.world.clock import day_of_tick
 from app.world.run import get_current_run_id
 
 router = APIRouter(prefix="/api")
@@ -43,7 +48,11 @@ async def list_runs():
         """
     )
     current = get_current_run_id()
-    return [{**dict(row), "current": row["id"] == current} for row in rows]
+    return [
+        {**dict(row), "current": row["id"] == current,
+         "days": day_of_tick(row["ticks"]) if row["ticks"] else 1}
+        for row in rows
+    ]
 
 
 @router.get("/runs/{run_id}/export")
@@ -86,6 +95,64 @@ async def export_run(run_id: int):
         "memories": [dict(r) for r in memories],
         "relationships": [dict(r) for r in relationships],
     }
+
+
+@router.get("/runs/{run_id}/extract")
+async def extract_days(
+    run_id: int, day_from: int = 1, day_to: int = 9999,
+    format: str = "json", download: bool = False,
+):
+    """Everything that happened in a life between two in-world days, as
+    structured JSON (day timeline + per-citizen views + bond evolution) or a
+    readable Markdown chronicle (format=report). Works on past and paused
+    lives alike."""
+    if day_from < 1 or day_to < day_from:
+        raise HTTPException(400, "day range must satisfy 1 <= day_from <= day_to")
+    data = await extract_range(run_id, day_from, day_to)
+    if data is None:
+        raise HTTPException(404, f"run {run_id} not found")
+
+    filename = f"life-{run_id}-days-{day_from}-{day_to}"
+    if format == "report":
+        headers = {"Content-Disposition": f'attachment; filename="{filename}.md"'} if download else {}
+        return PlainTextResponse(render_chronicle(data), media_type="text/markdown", headers=headers)
+    headers = {"Content-Disposition": f'attachment; filename="{filename}.json"'} if download else {}
+    return JSONResponse(data, headers=headers)
+
+
+@router.get("/runs/{run_id}/moments")
+async def key_moments(run_id: int, day_from: int = 1, day_to: int = 9999):
+    """LLM-curated key moments of a life (curated once per day, then stable)."""
+    pool = get_pool()
+    rows = await pool.fetch(
+        """
+        SELECT day, tick, category, title, description, citizens, significance, created_at
+        FROM key_moments WHERE run_id = $1 AND day BETWEEN $2 AND $3
+        ORDER BY tick, id
+        """,
+        run_id, day_from, day_to,
+    )
+    curated_days = await pool.fetch(
+        "SELECT DISTINCT day FROM key_moments WHERE run_id = $1 ORDER BY day", run_id
+    )
+    return {"moments": [dict(r) for r in rows],
+            "curated_days": [r["day"] for r in curated_days]}
+
+
+@router.post("/runs/{run_id}/moments/curate")
+async def curate_moments(run_id: int, day_from: int, day_to: int, force: bool = False):
+    """Run the key-moment curator over a day range (one LLM call per day).
+    Already-curated days are skipped unless force=true, so the record stays
+    stable. The live day auto-curates when it ends; use this for backfills."""
+    if day_from < 1 or day_to < day_from or day_to - day_from > 30:
+        raise HTTPException(400, "curate at most 30 days at a time, 1 <= day_from <= day_to")
+    results = {}
+    for day in range(day_from, day_to + 1):
+        try:
+            results[day] = await curate_day(run_id, day, force=force)
+        except Exception as exc:
+            results[day] = f"failed: {exc}"
+    return {"curated": {d: ("already curated" if n == -1 else n) for d, n in results.items()}}
 
 
 @router.get("/stats")

@@ -73,6 +73,49 @@ export async function updatePersona(id: string, body: PersonaBody) {
   return res.json();
 }
 
+export type Run = {
+  id: number;
+  started_at: string;
+  ended_at: string | null;
+  notes: string;
+  events: number;
+  conversations: number;
+  violations: number;
+  memories: number;
+  ticks: number;
+  days: number;
+  current: boolean;
+};
+
+export async function fetchRuns(): Promise<Run[]> {
+  const res = await fetch(`${API_URL}/runs`);
+  return res.json();
+}
+
+/** URL for downloading a day-range extract (json or report). */
+export function extractUrl(runId: number, dayFrom: number, dayTo: number, format: "json" | "report") {
+  return `${API_URL}/runs/${runId}/extract?day_from=${dayFrom}&day_to=${dayTo}&format=${format}&download=true`;
+}
+
+import type { KeyMoment } from "./types";
+
+export async function fetchKeyMoments(
+  runId: number
+): Promise<{ moments: KeyMoment[]; curated_days: number[] }> {
+  const res = await fetch(`${API_URL}/runs/${runId}/moments`);
+  return res.json();
+}
+
+/** Ask the curator to (re)read a day range and store its key moments. */
+export async function curateMoments(runId: number, dayFrom: number, dayTo: number) {
+  const res = await fetch(
+    `${API_URL}/runs/${runId}/moments/curate?day_from=${dayFrom}&day_to=${dayTo}`,
+    { method: "POST" }
+  );
+  if (!res.ok) throw new Error((await res.json()).detail ?? "curation failed");
+  return res.json();
+}
+
 export type Rule = { id: string; text: string; penalty: number };
 export type Constitution = { rules: Rule[]; reward: Record<string, number> };
 

@@ -2,6 +2,7 @@ export type Location = {
   label: string;
   icon?: string;
   color?: string;
+  private?: boolean;
   x: number;
   y: number;
   connects: string[];
@@ -13,8 +14,19 @@ export type WorldInitMessage = {
   tick_seconds?: number;
   run_id?: number;
   paused?: boolean;
+  sleeping?: string[];
   locations: Record<string, Location>;
   positions: Record<string, string>;
+};
+
+export type KeyMoment = {
+  day: number;
+  tick: number;
+  category: "rule" | "social" | "personal";
+  title: string;
+  description: string;
+  citizens: string[];
+  significance: number;
 };
 
 export type SimStateMessage = {

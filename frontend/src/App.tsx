@@ -2,6 +2,8 @@ import { useCallback, useEffect, useState } from "react";
 import { fetchAgents, pauseSim, resumeSim } from "./api";
 import { AgentInspector } from "./components/AgentInspector";
 import { CitizenEditor } from "./components/CitizenEditor";
+import { ExtractModal } from "./components/ExtractModal";
+import { KeyMoments } from "./components/KeyMoments";
 import { PolicyEditor } from "./components/PolicyEditor";
 import { Dashboard } from "./components/Dashboard";
 import { EventFeed } from "./components/EventFeed";
@@ -35,6 +37,7 @@ function App() {
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [editorOpen, setEditorOpen] = useState(false);
   const [policyOpen, setPolicyOpen] = useState(false);
+  const [extractOpen, setExtractOpen] = useState(false);
 
   const loadAgents = useCallback(() => fetchAgents().then(setAgents).catch(() => {}), []);
 
@@ -79,6 +82,13 @@ function App() {
             title={world?.paused ? "Continue life" : "Pause life (finishes the current tick first)"}
           >
             {world?.paused ? "▶ Continue" : "⏸ Pause"}
+          </button>
+          <button
+            className="btn"
+            onClick={() => setExtractOpen(true)}
+            title="Extract a day range of any life for analysis"
+          >
+            📊 Extract
           </button>
           <button className="btn" onClick={() => setPolicyOpen(true)} title="Edit the town's constitution">
             ⚖️ Rules
@@ -134,9 +144,18 @@ function App() {
         </aside>
       </main>
 
+      <KeyMoments
+        runId={world?.runId ?? null}
+        currentDay={clock.day}
+        agents={agents}
+        onSelectAgent={setSelectedAgentId}
+      />
+
       <Dashboard agents={agents} onSelectAgent={setSelectedAgentId} />
 
       {policyOpen && <PolicyEditor onClose={() => setPolicyOpen(false)} />}
+
+      {extractOpen && <ExtractModal onClose={() => setExtractOpen(false)} />}
 
       {editorOpen && world && (
         <CitizenEditor

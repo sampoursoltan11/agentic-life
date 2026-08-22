@@ -9,6 +9,7 @@ export type WorldSnapshot = {
   tickSeconds: number;
   runId: number | null;
   paused: boolean;
+  sleeping: string[];
   locations: Record<string, Location>;
   positions: Record<string, string>;
 };
@@ -66,6 +67,7 @@ export function useWorldSocket(maxEvents = 250) {
             tickSeconds: msg.tick_seconds ?? 6,
             runId,
             paused: msg.paused ?? false,
+            sleeping: msg.sleeping ?? [],
             locations: msg.locations,
             positions: msg.positions,
           });

@@ -11,6 +11,8 @@ const ACTION_ICON: Record<string, string> = {
   move: "🚶",
   speak: "💬",
   act: "🎬",
+  sleep: "😴",
+  wake: "🌅",
 };
 
 function byId(agents: Agent[], id: string): Agent | undefined {
