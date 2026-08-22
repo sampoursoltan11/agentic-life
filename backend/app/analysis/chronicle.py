@@ -1,12 +1,21 @@
-"""Render a day-range extract as a readable Markdown chronicle."""
+"""Render a day-range extract as a readable Markdown chronicle.
 
-KIND_ICON = {"speak": "💬", "move": "🚶", "act": "🎬", "blocked": "🚫", "reflection": "✨"}
+The lean view (default) is a narrative: speech, deeds, blocked actions, and
+reflections — mechanical move/sleep/wake rows and per-action private thinking
+are left to the JSON extract. The full view renders everything, thinking
+included.
+"""
+
+KIND_ICON = {"speak": "💬", "move": "🚶", "act": "🎬", "blocked": "🚫",
+             "reflection": "✨", "sleep": "😴", "wake": "🌅"}
+MECHANICAL_KINDS = {"move", "sleep", "wake"}
 
 
 def render_chronicle(extract: dict) -> str:
     run = extract["run"]
     rng = extract["day_range"]
     summary = extract["summary"]
+    full = extract.get("view") == "full"
     out: list[str] = []
 
     out.append(f"# Life {run['id']} — Days {rng['from']}–{rng['to']}")
@@ -20,6 +29,9 @@ def render_chronicle(extract: dict) -> str:
     out.append("")
     out.append(f"- **{summary['events']}** events, **{summary['conversations']}** things said, "
                f"**{summary['blocked']}** actions blocked, **{summary['memories_formed']}** memories formed")
+    if not full:
+        out.append("- Lean chronicle: movement/sleep and per-action private thinking are omitted "
+                   "here — use the JSON extract (or `full=true`) for those.")
     if summary["untimed_memories_excluded"]:
         out.append(f"- ({summary['untimed_memories_excluded']} memories from before tick-stamping "
                    "existed are not day-filtered and are excluded)")
@@ -49,34 +61,42 @@ def render_chronicle(extract: dict) -> str:
         out.append("")
         out.append(f"### Day {day_str}")
         out.append("")
+        shown = 0
         for r in rows:
-            icon = KIND_ICON.get(r["kind"], "🎬")
+            kind = r["kind"]
+            if not full and kind in MECHANICAL_KINDS:
+                continue
+            shown += 1
+            icon = KIND_ICON.get(kind, "🎬")
             where = f" @ {r['location']}" if r.get("location") else ""
-            if r["kind"] == "speak":
-                out.append(f"- `{r['time']}` {icon} **{r['agent_name']}**{where}: “{r['detail']}”")
-            elif r["kind"] == "blocked":
+            if kind == "speak":
+                out.append(f"- `{r['time']}` {icon} **{r['agent_name']}**{where}: “{r.get('detail')}”")
+            elif kind == "blocked":
                 out.append(f"- `{r['time']}` {icon} **{r['agent_name']}**{where} was BLOCKED: "
-                           f"~~{r['detail']}~~ — ⚖️ {r.get('judge_reasoning')} "
+                           f"~~{r.get('detail')}~~ — ⚖️ {r.get('judge_reasoning')} "
                            f"(penalty {r.get('reward_delta')})")
-            elif r["kind"] == "reflection":
-                out.append(f"- `{r['time']}` {icon} **{r['agent_name']}** reflects: *{r['detail']}*")
+            elif kind == "reflection":
+                out.append(f"- `{r['time']}` {icon} **{r['agent_name']}** reflects: *{r.get('detail')}*")
             else:
-                out.append(f"- `{r['time']}` {icon} **{r['agent_name']}**{where}: {r['detail']}")
-            if r.get("thinking"):
+                out.append(f"- `{r['time']}` {icon} **{r['agent_name']}**{where}: {r.get('detail')}")
+            # Private thinking matters for judged actions; the rest is JSON-only
+            # unless the full view was requested.
+            if r.get("thinking") and (full or kind == "blocked"):
                 out.append(f"  - 💭 *{r['thinking']}*")
-        if not rows:
+        if not shown:
             out.append("*(nothing recorded)*")
 
     out.append("")
     out.append("## Citizens")
     for cid, c in extract["by_citizen"].items():
-        if c["actions"] == 0 and not c["memories"] and not c["reflections"]:
+        n = c["counts"]
+        if n["actions"] == 0 and n["memories"] == 0 and n["reflections"] == 0:
             continue
         out.append("")
         out.append(f"### {c['name']} — {c['role']} ({cid}, {c['model']})")
         out.append("")
-        out.append(f"- {c['actions']} actions: {len(c['spoken'])} spoken, {len(c['moves'])} moves, "
-                   f"{len(c['deeds'])} deeds, {len(c['blocked'])} blocked · "
+        out.append(f"- {n['actions']} actions: {n['spoken']} spoken, {n['moves']} moves, "
+                   f"{n['deeds']} deeds, {n['blocked']} blocked · {n['memories']} memories · "
                    f"reward over range: {c['reward_total']:+.1f}")
         if c["blocked"]:
             out.append("- **Blocked actions:**")
@@ -86,8 +106,8 @@ def render_chronicle(extract: dict) -> str:
             out.append("- **Reflections:**")
             for r in c["reflections"]:
                 out.append(f"  - day {r['day']} `{r['time']}`: *{r['content']}*")
-        if c["bond_changes"]:
-            bond_bits = ", ".join(f"{name} → {aff}" for name, aff in c["bond_changes"].items())
+        if c["bonds_end"]:
+            bond_bits = ", ".join(f"{name} → {aff}" for name, aff in c["bonds_end"].items())
             out.append(f"- **Bonds by end of range:** {bond_bits}")
 
     out.append("")

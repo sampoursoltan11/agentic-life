@@ -67,19 +67,34 @@ The deepest analysis tool: extract everything that happened in a life between
 two in-world days (📊 **Extract** in the HUD, or the API):
 
 ```bash
-# structured JSON: day timeline + per-citizen views + bond evolution
+# structured JSON: day timeline + per-citizen digest + bond evolution
 curl "localhost:8000/api/runs/2/extract?day_from=3&day_to=7" > days3-7.json
 # readable Markdown chronicle of the same range
 curl "localhost:8000/api/runs/2/extract?day_from=3&day_to=7&format=report" > days3-7.md
+# raw firehose (everything, with duplication — several times larger)
+curl "localhost:8000/api/runs/2/extract?day_from=3&day_to=7&full=true" > days3-7-full.json
 ```
 
-The JSON contains: `timeline` (day → chronological events with each actor's
-private thinking, judge verdicts on blocked actions, in-world clock times),
-`by_citizen` (each citizen's spoken lines, moves, deeds, blocked actions,
-reflections, memories, reward total, and end-of-range bonds), `bonds`
-(start/end affinity per pair plus every change in between), and per-day
-summary counts. The chronicle renders the same range as a readable day-by-day
-story with per-citizen and bond-evolution sections.
+The default extract is **lean and duplication-free** — every fact appears
+exactly once, so it stays small enough to hand to an LLM or skim by hand:
+
+- `timeline` — day → chronological events with in-world clock times. Private
+  thinking is kept on speech/deeds/blocked actions (the behavioural signal)
+  and stripped from mechanical move/sleep/wake rows; null fields are omitted.
+- `by_citizen` — a digest per citizen: action `counts`, reward total, blocked
+  actions with judge reasoning, reflections, and end-of-range bonds. The raw
+  spoken/moves/deeds arrays are *not* repeated here (they're the timeline),
+  and perception memories ("I said…", "I heard…") are only counted — they
+  restate timeline events; reflections carry the distilled signal.
+- `bonds` — start/end affinity per pair, `changed_pairs` deltas, and
+  `end_of_day` trajectory (one value per pair per day, not per tick).
+
+`full=true` adds the raw firehose on top: per-citizen action/memory arrays,
+every tick-level bond change, and thinking on mechanical events. The
+chronicle renders the same range as a readable day-by-day story (speech,
+deeds, blocked actions with judge reasoning, reflections — movement and
+per-action thinking live in the JSON) with per-citizen and bond-evolution
+sections; with `full=true` it includes everything, thinking bullets included.
 
 Notes: one in-world day = 72 ticks (20 min/tick from 08:00). Events, memories,
 judgements, and bond changes are tick-stamped as they happen; rows from lives

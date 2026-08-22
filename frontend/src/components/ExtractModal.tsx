@@ -11,6 +11,7 @@ export function ExtractModal({ onClose }: Props) {
   const [runId, setRunId] = useState<number | null>(null);
   const [dayFrom, setDayFrom] = useState(1);
   const [dayTo, setDayTo] = useState(1);
+  const [full, setFull] = useState(false);
 
   useEffect(() => {
     fetchRuns()
@@ -38,7 +39,7 @@ export function ExtractModal({ onClose }: Props) {
 
   const download = (format: "json" | "report") => {
     if (!valid || runId === null) return;
-    window.open(extractUrl(runId, dayFrom, Math.min(dayTo, maxDay), format), "_blank");
+    window.open(extractUrl(runId, dayFrom, Math.min(dayTo, maxDay), format, full), "_blank");
   };
 
   return (
@@ -51,10 +52,10 @@ export function ExtractModal({ onClose }: Props) {
           </button>
         </div>
         <p className="modal__hint">
-          Pick a life and a day range: you get everything that happened — every action with its
-          private thinking, every conversation, every judgement, memories, reflections, and how
-          bonds evolved — as structured JSON for analysis and/or a readable chronicle. Works on
-          past and paused lives.
+          Pick a life and a day range: a lean, duplication-free record built for analysis — one
+          chronological timeline (speech, deeds, judgements, reflections, private thinking where
+          it matters), a per-citizen digest, and day-by-day bond evolution — as structured JSON
+          and/or a readable chronicle. Works on past and paused lives.
         </p>
 
         <div className="extract__runs">
@@ -113,6 +114,10 @@ export function ExtractModal({ onClose }: Props) {
           <button className="btn" onClick={() => download("report")} disabled={!valid}>
             ⬇ Chronicle (.md)
           </button>
+          <label className="extract__full">
+            <input type="checkbox" checked={full} onChange={(e) => setFull(e.target.checked)} />
+            full firehose (every memory, move, bond tick — much larger)
+          </label>
           <span className="editor__note">
             or script it: <code>GET /api/runs/{"{id}"}/extract?day_from=&day_to=</code>
           </span>

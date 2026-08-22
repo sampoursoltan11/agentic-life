@@ -210,10 +210,20 @@
 .modal__foot {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 12px;
   margin-top: 16px;
   padding-top: 14px;
   border-top: 1px solid var(--grid);
+}
+
+.extract__full {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--ink-dim, #888);
+  cursor: pointer;
 }
 
 .editor {

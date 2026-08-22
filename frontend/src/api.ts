@@ -92,9 +92,15 @@ export async function fetchRuns(): Promise<Run[]> {
   return res.json();
 }
 
-/** URL for downloading a day-range extract (json or report). */
-export function extractUrl(runId: number, dayFrom: number, dayTo: number, format: "json" | "report") {
-  return `${API_URL}/runs/${runId}/extract?day_from=${dayFrom}&day_to=${dayTo}&format=${format}&download=true`;
+/** URL for downloading a day-range extract (json or report). Lean by default; full adds the raw firehose. */
+export function extractUrl(
+  runId: number,
+  dayFrom: number,
+  dayTo: number,
+  format: "json" | "report",
+  full = false
+) {
+  return `${API_URL}/runs/${runId}/extract?day_from=${dayFrom}&day_to=${dayTo}&format=${format}&download=true${full ? "&full=true" : ""}`;
 }
 
 import type { KeyMoment } from "./types";

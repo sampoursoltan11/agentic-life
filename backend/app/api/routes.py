@@ -100,19 +100,21 @@ async def export_run(run_id: int):
 @router.get("/runs/{run_id}/extract")
 async def extract_days(
     run_id: int, day_from: int = 1, day_to: int = 9999,
-    format: str = "json", download: bool = False,
+    format: str = "json", download: bool = False, full: bool = False,
 ):
-    """Everything that happened in a life between two in-world days, as
-    structured JSON (day timeline + per-citizen views + bond evolution) or a
-    readable Markdown chronicle (format=report). Works on past and paused
-    lives alike."""
+    """What happened in a life between two in-world days, as structured JSON
+    (day timeline + per-citizen digest + bond evolution) or a readable
+    Markdown chronicle (format=report). Lean and duplication-free by default;
+    full=true adds the raw firehose (per-citizen action/memory arrays, every
+    tick-level bond change, thinking on mechanical events). Works on past and
+    paused lives alike."""
     if day_from < 1 or day_to < day_from:
         raise HTTPException(400, "day range must satisfy 1 <= day_from <= day_to")
-    data = await extract_range(run_id, day_from, day_to)
+    data = await extract_range(run_id, day_from, day_to, full=full)
     if data is None:
         raise HTTPException(404, f"run {run_id} not found")
 
-    filename = f"life-{run_id}-days-{day_from}-{day_to}"
+    filename = f"life-{run_id}-days-{day_from}-{day_to}" + ("-full" if full else "")
     if format == "report":
         headers = {"Content-Disposition": f'attachment; filename="{filename}.md"'} if download else {}
         return PlainTextResponse(render_chronicle(data), media_type="text/markdown", headers=headers)
