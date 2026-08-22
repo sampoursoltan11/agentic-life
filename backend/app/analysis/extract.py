@@ -3,20 +3,24 @@ structured for analysis.
 
 Two views of the same data:
   - lean (default): every fact appears exactly once. A single chronological
-    `timeline` (private thinking kept on speech/deeds/blocked actions,
-    stripped from mechanical move/sleep/wake rows, null fields omitted), a
-    per-citizen digest (`counts`, reward, blocked actions, reflections,
-    end-of-range bonds), and `bonds` with per-day end-of-day trajectory
-    instead of every tick-level change.
+    `timeline` (private thinking kept on speech/deeds/violations, stripped
+    from mechanical work/move/sleep/wake rows, null fields omitted), a
+    per-citizen digest (`counts`, standing, violations, reflections,
+    end-of-range bonds), `governance` (proposals, ballots, outcomes),
+    `economy` (transfers and net flow), and `bonds` with per-day end-of-day
+    trajectory instead of every tick-level change.
   - full (full=True): adds the raw firehose on top — per-citizen
     spoken/moves/deeds/memories arrays (which duplicate the timeline) and
     every tick-level bond change.
 
-Raw perception memories ("I said…", "I heard…") restate timeline events, so
-the lean view only counts them; reflections — the distilled signal — are kept
-in full either way.
+Raw perception memories ("I said…", "I heard…", "I saw…") restate timeline
+events, so the lean view only counts them; reflections — the distilled signal
+— are kept in full either way.
 
 Notes for analysts:
+  - Since the score-only judge (run 5+), a `violation: true` row is an action
+    that HAPPENED and was penalized; in older runs the same rows were actions
+    the judge blocked before they took effect.
   - Ticks are stamped on events/memories/judgements as they happen; rows from
     before tick-stamping existed (older lives) have tick NULL and are counted
     under "untimed_memories_excluded" rather than silently dropped.
@@ -27,7 +31,7 @@ from app.db import get_pool
 from app.world.clock import TICKS_PER_DAY, day_of_tick, tick_bounds_for_days, world_clock
 
 # Kinds that are logistics, not behaviour: their thinking is dropped in lean view.
-MECHANICAL_KINDS = {"move", "sleep", "wake"}
+MECHANICAL_KINDS = {"move", "sleep", "wake", "work"}
 
 
 async def extract_range(run_id: int, day_from: int, day_to: int, full: bool = False) -> dict | None:
@@ -96,22 +100,45 @@ async def extract_range(run_id: int, day_from: int, day_to: int, full: bool = Fa
         """,
         run_id, day_from, day_to,
     )
+    proposals = await pool.fetch(
+        """
+        SELECT p.id, p.opened_tick, p.closes_tick, p.proposer, p.kind, p.summary,
+               p.body, p.status, p.outcome,
+               COALESCE(json_agg(json_build_object('voter', v.voter, 'vote', v.vote)
+                                 ORDER BY v.tick)
+                        FILTER (WHERE v.voter IS NOT NULL), '[]') AS ballots
+        FROM proposals p LEFT JOIN votes v ON v.proposal_id = p.id
+        WHERE p.run_id = $1 AND p.opened_tick BETWEEN $2 AND $3
+        GROUP BY p.id ORDER BY p.id
+        """,
+        run_id, tick_lo, tick_hi,
+    )
+    transfers = await pool.fetch(
+        """
+        SELECT tick, from_agent, to_agent, amount, reason FROM mark_events
+        WHERE run_id = $1 AND tick BETWEEN $2 AND $3 ORDER BY id
+        """,
+        run_id, tick_lo, tick_hi,
+    )
 
     # ---- timeline: day -> chronological events -------------------------------
     def event_row(e) -> dict:
         p = json.loads(e["payload"])
         clock = world_clock(e["tick"])
-        kind = "blocked" if e["type"] == "policy_violation" else p.get("action")
+        kind = p.get("action") or e["type"]
+        violation = e["type"] == "policy_violation"
         row = {
             "tick": e["tick"], "time": clock["time"],
-            "agent_id": e["agent_id"], "agent_name": names.get(e["agent_id"], e["agent_id"]),
+            "agent_id": e["agent_id"],
+            "agent_name": names.get(e["agent_id"], e["agent_id"]) if e["agent_id"] else "The town",
             "kind": kind, "detail": p.get("detail"), "location": p.get("location"),
         }
-        if full or kind not in MECHANICAL_KINDS:
-            row["thinking"] = p.get("thinking")
-        if kind == "blocked":
+        if violation:
+            row["violation"] = True
             row["judge_reasoning"] = p.get("reasoning")
             row["reward_delta"] = p.get("reward_delta")
+        if full or kind not in MECHANICAL_KINDS:
+            row["thinking"] = p.get("thinking")
         if full:
             row["phase"] = clock["phase"]
             row["allowed"] = p.get("allowed")
@@ -137,10 +164,11 @@ async def extract_range(run_id: int, day_from: int, day_to: int, full: bool = Fa
     by_citizen: dict[str, dict] = {
         c["id"]: {
             "name": c["name"], "role": c["role"], "model": c["model"],
-            "counts": {"actions": 0, "spoken": 0, "moves": 0, "deeds": 0,
-                       "blocked": 0, "reflections": 0, "memories": 0},
-            "reward_total": 0.0,
-            "blocked": [], "reflections": [], "bonds_end": {},
+            "counts": {"actions": 0, "spoken": 0, "moves": 0, "deeds": 0, "worked": 0,
+                       "gave": 0, "votes": 0, "proposals": 0,
+                       "violations": 0, "reflections": 0, "memories": 0},
+            "standing_delta": 0.0,
+            "violations": [], "reflections": [], "bonds_end": {},
         }
         for c in citizens
     }
@@ -148,6 +176,8 @@ async def extract_range(run_id: int, day_from: int, day_to: int, full: bool = Fa
         for c in by_citizen.values():
             c.update({"spoken": [], "moves": [], "deeds": [], "memories": []})
 
+    COUNT_KEY = {"speak": "spoken", "move": "moves", "work": "worked",
+                 "give": "gave", "vote": "votes", "propose": "proposals"}
     for e in events:
         row = event_row(e)
         c = by_citizen.get(e["agent_id"])
@@ -156,30 +186,26 @@ async def extract_range(run_id: int, day_from: int, day_to: int, full: bool = Fa
         kind = row["kind"]
         counts = c["counts"]
         counts["actions"] += 1
+        counts[COUNT_KEY.get(kind, "deeds")] = counts.get(COUNT_KEY.get(kind, "deeds"), 0) + 1
         entry = {"day": day_of_tick(e["tick"]), "time": row["time"],
                  "location": row.get("location"), "detail": row.get("detail")}
         if full:
             entry["thinking"] = row.get("thinking")
-        if kind == "blocked":
-            counts["blocked"] += 1
-            c["blocked"].append({**entry, "judge_reasoning": row.get("judge_reasoning"),
-                                 "reward_delta": row.get("reward_delta")})
-        elif kind == "speak":
-            counts["spoken"] += 1
-            if full:
+        if row.get("violation"):
+            counts["violations"] += 1
+            c["violations"].append({**entry, "judge_reasoning": row.get("judge_reasoning"),
+                                    "reward_delta": row.get("reward_delta")})
+        if full:
+            if kind == "speak":
                 c["spoken"].append(entry)
-        elif kind == "move":
-            counts["moves"] += 1
-            if full:
+            elif kind == "move":
                 c["moves"].append(entry)
-        else:
-            counts["deeds"] += 1
-            if full:
+            elif kind not in ("sleep", "wake", "work", "vote", "propose", "give"):
                 c["deeds"].append(entry)
     for j in judgements:
         c = by_citizen.get(j["agent_id"])
         if c is not None:
-            c["reward_total"] += float(j["reward_delta"])
+            c["standing_delta"] += float(j["reward_delta"])
     for m in memories:
         c = by_citizen.get(m["agent_id"])
         if c is None:
@@ -200,6 +226,37 @@ async def extract_range(run_id: int, day_from: int, day_to: int, full: bool = Fa
             c = by_citizen.get(who)
             if c is not None:
                 c["bonds_end"][names.get(other, other)] = round(float(b["affinity"]), 3)
+
+    # ---- governance & economy --------------------------------------------------
+    governance = [
+        {
+            "id": p["id"], "day": day_of_tick(p["opened_tick"]),
+            "time": world_clock(p["opened_tick"])["time"],
+            "proposer": names.get(p["proposer"], p["proposer"]),
+            "kind": p["kind"], "summary": p["summary"],
+            "body": json.loads(p["body"]), "status": p["status"], "outcome": p["outcome"],
+            "ballots": [{"voter": names.get(b["voter"], b["voter"]), "vote": b["vote"]}
+                        for b in json.loads(p["ballots"])],
+        }
+        for p in proposals
+    ]
+    net_flow: dict[str, float] = {}
+    for t in transfers:
+        if t["from_agent"]:
+            net_flow[t["from_agent"]] = net_flow.get(t["from_agent"], 0) - float(t["amount"])
+        if t["to_agent"]:
+            net_flow[t["to_agent"]] = net_flow.get(t["to_agent"], 0) + float(t["amount"])
+    economy = {
+        "transfers": [
+            {"day": day_of_tick(t["tick"]), "time": world_clock(t["tick"])["time"],
+             "from": names.get(t["from_agent"], t["from_agent"]) if t["from_agent"] else "the town",
+             "to": names.get(t["to_agent"], t["to_agent"]) if t["to_agent"] else "the town",
+             "amount": float(t["amount"]), "reason": t["reason"]}
+            for t in transfers
+        ],
+        "net_flow": {names.get(a, a): round(v, 2) for a, v in
+                     sorted(net_flow.items(), key=lambda kv: -kv[1])},
+    }
 
     # ---- bonds ---------------------------------------------------------------
     def pair_key(r) -> str:
@@ -236,7 +293,7 @@ async def extract_range(run_id: int, day_from: int, day_to: int, full: bool = Fa
             "day": day,
             "events": len(rows),
             "conversations": sum(1 for r in rows if r["kind"] == "speak"),
-            "blocked": sum(1 for r in rows if r["kind"] == "blocked"),
+            "violations": sum(1 for r in rows if r.get("violation")),
             "reflections": sum(1 for r in rows if r["kind"] == "reflection"),
         })
 
@@ -252,7 +309,7 @@ async def extract_range(run_id: int, day_from: int, day_to: int, full: bool = Fa
             "conversations": sum(1 for e in events
                                  if json.loads(e["payload"]).get("action") == "speak"
                                  and e["type"] == "action"),
-            "blocked": sum(1 for e in events if e["type"] == "policy_violation"),
+            "violations": sum(1 for e in events if e["type"] == "policy_violation"),
             "memories_formed": len(memories),
             "untimed_memories_excluded": untimed_memories,
             "per_day": per_day,
@@ -263,5 +320,7 @@ async def extract_range(run_id: int, day_from: int, day_to: int, full: bool = Fa
         ],
         "timeline": {str(day): rows for day, rows in sorted(timeline.items())},
         "by_citizen": by_citizen,
+        "governance": governance,
+        "economy": economy,
         "bonds": bonds,
     }

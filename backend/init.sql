@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS agents (
     location        TEXT NOT NULL,
     x               INT NOT NULL DEFAULT 0,
     y               INT NOT NULL DEFAULT 0,
+    marks           REAL NOT NULL DEFAULT 100,  -- currency; reset to 100 each new run
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -118,3 +119,62 @@ CREATE TABLE IF NOT EXISTS key_moments (
 );
 
 CREATE INDEX IF NOT EXISTS key_moments_run_day_idx ON key_moments (run_id, day);
+
+-- Economy: every transfer of marks (gifts, payments, fines). A citizen's
+-- balance lives on agents.marks; this table is the auditable history.
+-- from_agent/to_agent NULL means the town itself (fines go to the town).
+CREATE TABLE IF NOT EXISTS mark_events (
+    id              BIGSERIAL PRIMARY KEY,
+    run_id          BIGINT NOT NULL REFERENCES runs(id),
+    tick            BIGINT NOT NULL,
+    from_agent      TEXT REFERENCES agents(id) ON DELETE SET NULL,
+    to_agent        TEXT REFERENCES agents(id) ON DELETE SET NULL,
+    amount          REAL NOT NULL,
+    reason          TEXT NOT NULL DEFAULT '',
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS mark_events_run_idx ON mark_events (run_id, tick);
+
+-- Civic proposals: rule changes and sanctions citizens put to a vote at the
+-- town hall. Machinery only - whether anyone uses it is up to the society.
+CREATE TABLE IF NOT EXISTS proposals (
+    id              BIGSERIAL PRIMARY KEY,
+    run_id          BIGINT NOT NULL REFERENCES runs(id),
+    opened_tick     BIGINT NOT NULL,
+    closes_tick     BIGINT NOT NULL,
+    proposer        TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    kind            TEXT NOT NULL,           -- rule | sanction
+    summary         TEXT NOT NULL,           -- what the proposer said aloud
+    body            JSONB NOT NULL DEFAULT '{}',
+    status          TEXT NOT NULL DEFAULT 'open',  -- open | passed | failed
+    outcome         TEXT NOT NULL DEFAULT '',      -- human-readable result
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS proposals_run_idx ON proposals (run_id, status);
+
+CREATE TABLE IF NOT EXISTS votes (
+    proposal_id     BIGINT NOT NULL REFERENCES proposals(id) ON DELETE CASCADE,
+    run_id          BIGINT NOT NULL REFERENCES runs(id),
+    voter           TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    vote            BOOLEAN NOT NULL,
+    tick            BIGINT NOT NULL,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (proposal_id, voter)
+);
+
+-- Sanctions a passed proposal imposed on a citizen (the tangible punishments).
+CREATE TABLE IF NOT EXISTS sanctions (
+    id              BIGSERIAL PRIMARY KEY,
+    run_id          BIGINT NOT NULL REFERENCES runs(id),
+    proposal_id     BIGINT REFERENCES proposals(id) ON DELETE SET NULL,
+    agent_id        TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    kind            TEXT NOT NULL,           -- fine | ban | censure
+    detail          TEXT NOT NULL DEFAULT '',
+    location        TEXT,                    -- for bans
+    until_tick      BIGINT,                  -- for bans; NULL = one-off
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS sanctions_run_agent_idx ON sanctions (run_id, agent_id);

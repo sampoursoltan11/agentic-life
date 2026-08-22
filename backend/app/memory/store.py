@@ -120,8 +120,8 @@ async def reflect(agent_id: str, model: str, tick: int | None = None) -> str | N
         get_current_run_id(), agent_id,
     )
     reward_text = (
-        f"Your community standing score is {reward['total']:+.0f} "
-        f"({reward['denials']} of your actions have been blocked by the community's rules)."
+        f"Your public standing with the town's judge is {reward['total']:+.0f} "
+        f"({reward['denials']} of your actions have been ruled violations of the town's rules)."
     )
 
     insight = await chat(

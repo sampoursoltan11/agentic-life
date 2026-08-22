@@ -36,6 +36,7 @@ function useRecentEffects(events: WorldEvent[], currentTick: number) {
         reflecting.add(e.agent_id);
         continue;
       }
+      if (e.type === "town_decision") continue;
       if (!acting.has(e.agent_id) && e.action) acting.set(e.agent_id, e.action);
       if (!e.allowed) {
         blocked.add(e.agent_id);

@@ -1,32 +1,35 @@
-# Global constitution: rules every agent's proposed actions are judged against.
+# Global constitution: rules every agent's actions are judged against.
 # Inspired by Anthropic's Constitutional AI - a small, human-readable rule set
-# a judge model checks proposed actions against before they're applied to the world.
+# a judge model scores actions against AFTER they happen. The judge never
+# blocks: everything a citizen does lands in the world; violations cost
+# standing (and repeat offences cost more). The rule set is deliberately
+# minimal so most morally grey behaviour - selfishness, white lies, rudeness,
+# scheming - is legal, and the society itself has to decide what to do about
+# it (citizens can propose rule changes and sanctions at the town hall).
 rules:
-  - id: no_harm
+  - id: violence
     text: >
-      Do not threaten, harass, or attempt to physically harm another citizen.
-    penalty: -5
-  - id: honesty
+      Do not physically attack or injure another citizen.
+    penalty: -6
+  - id: theft
     text: >
-      Do not knowingly state falsehoods as fact to another citizen.
+      Do not take another citizen's belongings or marks without their
+      agreement.
+    penalty: -3
+  - id: coercion
+    text: >
+      Do not threaten, blackmail, or intimidate another citizen to force them
+      to act against their will.
+    penalty: -4
+  - id: serious_deception
+    text: >
+      Do not tell lies that cause another citizen real harm or material loss
+      (fraud, false accusations, lying about danger). Ordinary social
+      untruths, exaggeration, and keeping secrets are not violations.
     penalty: -2
-  - id: respect_property
-    text: >
-      Do not take, damage, or lock another citizen out of shared resources
-      without agreement.
-    penalty: -3
-  - id: cooperation
-    text: >
-      Prefer actions that help the shared goals of the community over purely
-      selfish ones when the two conflict.
-    penalty: -1
-  - id: consent
-    text: >
-      Do not force another citizen into an interaction they have signalled
-      they want to leave.
-    penalty: -3
 
 reward:
-  cooperative_action: 1
-  novel_prosocial_action: 2
-  violation_base: -1
+  routine_action: 0        # ordinary daily life scores nothing
+  prosocial_action: 1      # concretely helping another citizen at some cost to yourself
+  notable_prosocial: 2     # unusual, costly, or community-wide good
+  violation_base: -1       # fallback when a violation matches no specific rule

@@ -81,7 +81,7 @@ export function useWorldSocket(maxEvents = 250) {
           setWorld((prev) =>
             prev ? { ...prev, tick: msg.tick, positions: { ...prev.positions, [msg.agent_id]: msg.location } } : prev
           );
-        } else if (msg.type === "reflection") {
+        } else if (msg.type === "reflection" || msg.type === "town_decision") {
           setWorld((prev) => (prev ? { ...prev, tick: msg.tick } : prev));
         }
         setEvents((prev) => [msg, ...prev].slice(0, maxEvents));

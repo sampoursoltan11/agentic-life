@@ -23,11 +23,64 @@ async def list_agents():
     pool = get_pool()
     rows = await pool.fetch(
         """
-        SELECT id, name, model, role, avatar, backstory, traits, goals, location
-        FROM agents ORDER BY name
-        """
+        SELECT a.id, a.name, a.model, a.role, a.avatar, a.backstory, a.traits,
+               a.goals, a.location, a.marks,
+               COALESCE((SELECT SUM(pe.reward_delta) FROM policy_events pe
+                         WHERE pe.run_id = $1 AND pe.agent_id = a.id), 0) AS standing
+        FROM agents a ORDER BY a.name
+        """,
+        get_current_run_id(),
     )
     return [dict(row) for row in rows]
+
+
+@router.get("/proposals")
+async def list_proposals(run_id: int | None = None, status: str | None = None):
+    """Civic proposals (rule changes and sanctions) with their ballots."""
+    pool = get_pool()
+    rows = await pool.fetch(
+        """
+        SELECT p.id, p.opened_tick, p.closes_tick, p.proposer, p.kind, p.summary,
+               p.body, p.status, p.outcome,
+               COALESCE(json_agg(json_build_object('voter', v.voter, 'vote', v.vote,
+                                                   'tick', v.tick) ORDER BY v.tick)
+                        FILTER (WHERE v.voter IS NOT NULL), '[]') AS ballots
+        FROM proposals p LEFT JOIN votes v ON v.proposal_id = p.id
+        WHERE p.run_id = $1 AND ($2::text IS NULL OR p.status = $2)
+        GROUP BY p.id ORDER BY p.id DESC
+        """,
+        _run(run_id), status,
+    )
+    return [{**dict(r), "body": json.loads(r["body"]),
+             "ballots": json.loads(r["ballots"])} for r in rows]
+
+
+@router.get("/economy")
+async def economy_ledger(run_id: int | None = None, limit: int = 200):
+    """Balances plus the transfer ledger (gifts, payments, fines)."""
+    pool = get_pool()
+    balances = await pool.fetch("SELECT id, name, marks FROM agents ORDER BY marks DESC")
+    ledger = await pool.fetch(
+        """
+        SELECT tick, from_agent, to_agent, amount, reason FROM mark_events
+        WHERE run_id = $1 ORDER BY id DESC LIMIT $2
+        """,
+        _run(run_id), limit,
+    )
+    return {"balances": [dict(r) for r in balances], "ledger": [dict(r) for r in ledger]}
+
+
+@router.get("/sanctions")
+async def list_sanctions(run_id: int | None = None):
+    """Sanctions imposed by passed proposals (fines, bans, censures)."""
+    rows = await get_pool().fetch(
+        """
+        SELECT id, proposal_id, agent_id, kind, detail, location, until_tick
+        FROM sanctions WHERE run_id = $1 ORDER BY id DESC
+        """,
+        _run(run_id),
+    )
+    return [dict(r) for r in rows]
 
 
 @router.get("/runs")

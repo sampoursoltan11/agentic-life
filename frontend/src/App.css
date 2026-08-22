@@ -1211,6 +1211,41 @@
   color: var(--violet);
 }
 
+.chip--work {
+  background: var(--surface-2);
+  border-color: var(--border);
+  color: var(--ink-2);
+}
+
+.chip--give,
+.chip--passed {
+  background: color-mix(in oklab, var(--good, #3f9c5c) 14%, var(--surface));
+  border-color: color-mix(in oklab, var(--good, #3f9c5c) 45%, var(--surface));
+  color: var(--good, #3f9c5c);
+}
+
+.chip--propose,
+.chip--vote {
+  background: color-mix(in oklab, var(--tint-move) 14%, var(--surface));
+  border-color: color-mix(in oklab, var(--tint-move) 45%, var(--surface));
+  color: var(--tint-move);
+}
+
+.chip--failed {
+  background: color-mix(in oklab, var(--critical) 14%, var(--surface));
+  border-color: var(--critical);
+  color: var(--critical);
+}
+
+.entry--town {
+  background: color-mix(in oklab, var(--tint-move) 7%, var(--surface));
+  border-left: 3px solid var(--tint-move);
+}
+
+.entry--town .entry__avatar {
+  cursor: default;
+}
+
 .chip--model {
   font-family: var(--mono);
   font-weight: 500;

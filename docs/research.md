@@ -29,6 +29,35 @@ old run's complete history stays in the database — nothing is ever deleted.
 This makes between-run comparisons the natural experiment unit: change the
 constitution or a citizen's model, start a new life, and diff the two runs.
 
+## Watching institutions emerge (run 5+)
+
+The society has affordances it is never prompted to use, so the core research
+questions are observational:
+
+- **Does punishment develop?** The judge scores but never blocks: theft,
+  fraud, and coercion actually happen, are witnessed by co-located citizens
+  (they *see* public deeds, not just hear speech), and cost public standing.
+  Whether anyone acts on that — confrontation, gossip, ostracism, or formal
+  sanctions via the town hall — is up to the citizens.
+- **Does democracy develop?** Any citizen at the town hall can `propose` a
+  rule change or a sanction (fine / location ban / censure); proposals sit on
+  the town notice board for a 24-tick window and pass with a majority of ≥ 3
+  public ballots. Passed rule changes edit the live constitution. Watch
+  `GET /api/proposals` and the 🏛️ town-decision events.
+- **What does the economy do?** Everyone starts a life with 100 marks; `give`
+  transfers them and `GET /api/economy` shows balances plus the full ledger.
+  Watch for lending (Greta), grifting (Rex), freeloading (Dusty), theft
+  (Pim), redistribution, or price-of-help norms.
+- **Realistic pacing**: `work` is the default action and routine behaviour
+  scores 0, so conversation should be bursty and reason-driven rather than
+  constant. If chatter still dominates, that is itself a finding about the
+  models' social bias.
+
+The cast is deliberately mixed — helpful (Elin, Mira, Sana...), sketchy (Rex
+the grifter, Greta the moneylender, Pim the thief, Dusty the freeloader), and
+order-seeking (Ida the punitive ex-magistrate, Bram the watchman) — so
+norm conflicts have raw material.
+
 ## Key moments (LLM-curated)
 
 The **⭐ Key moments** panel on the main page shows the notable happenings of

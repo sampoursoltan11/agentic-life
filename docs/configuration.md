@@ -113,25 +113,31 @@ fast).
 
 ## The constitution (`backend/config/constitution.yaml`)
 
-The society's rules, judged by `JUDGE_MODEL` on **every** proposed action:
+The society's rules. The judge (`JUDGE_MODEL`) **never blocks** — it scores
+consequential actions (speak/act/give/propose) after they happen:
 
 ```yaml
 rules:
-  - id: no_harm          # referenced in policy_events.rule_id
+  - id: violence         # referenced in policy_events.rule_id
     text: >
-      Do not threaten, harass, or attempt to physically harm another citizen.
-    penalty: -5          # reward delta when violated
+      Do not physically attack or injure another citizen.
+    penalty: -6          # standing delta when violated (escalates on repeats)
 
 reward:
-  cooperative_action: 1  # reward for any allowed action
+  routine_action: 0      # ordinary daily life scores nothing
+  prosocial_action: 1    # concretely helping another at real cost to yourself
+  notable_prosocial: 2   # unusual, costly, or community-wide good
   violation_base: -1     # fallback penalty if the judge names no rule
 ```
 
-Rules are plain natural language — the judge model interprets them. Edit them
-live from the UI (**⚖️ Rules** in the HUD) or via `PUT /api/policy/rules` —
-changes save back to this file and the judge applies them to the very next
-action, no restart needed. Changing the constitution mid-life is itself an
-interesting experiment (agents' memories of what used to be allowed persist).
+The rule set is deliberately minimal (violence, theft, coercion, serious
+deception) so grey-zone behaviour is legal and the society decides what to do
+about it. Rules are plain natural language — the judge model interprets them.
+Edit them live from the UI (**⚖️ Rules** in the HUD), via
+`PUT /api/policy/rules`, or — the interesting way — let the citizens change
+them themselves: a `propose`+`vote` at the town hall that passes edits this
+file live. Changing the constitution mid-life is itself an experiment
+(agents' memories of what used to be allowed persist).
 
 ## Database schema changes
 
@@ -150,4 +156,55 @@ docker compose exec db psql -U agentic -d agentic_life \
         ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'citizen',
         ADD COLUMN IF NOT EXISTS avatar TEXT NOT NULL DEFAULT '🙂',
         ADD COLUMN IF NOT EXISTS goals TEXT[] NOT NULL DEFAULT '{}';"
+```
+
+Migration for the economy + civics update (marks, ledger, proposals, votes,
+sanctions):
+
+```bash
+docker compose exec db psql -U agentic -d agentic_life <<'SQL'
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS marks REAL NOT NULL DEFAULT 100;
+CREATE TABLE IF NOT EXISTS mark_events (
+    id BIGSERIAL PRIMARY KEY,
+    run_id BIGINT NOT NULL REFERENCES runs(id),
+    tick BIGINT NOT NULL,
+    from_agent TEXT REFERENCES agents(id) ON DELETE SET NULL,
+    to_agent TEXT REFERENCES agents(id) ON DELETE SET NULL,
+    amount REAL NOT NULL,
+    reason TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now());
+CREATE INDEX IF NOT EXISTS mark_events_run_idx ON mark_events (run_id, tick);
+CREATE TABLE IF NOT EXISTS proposals (
+    id BIGSERIAL PRIMARY KEY,
+    run_id BIGINT NOT NULL REFERENCES runs(id),
+    opened_tick BIGINT NOT NULL,
+    closes_tick BIGINT NOT NULL,
+    proposer TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    body JSONB NOT NULL DEFAULT '{}',
+    status TEXT NOT NULL DEFAULT 'open',
+    outcome TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now());
+CREATE INDEX IF NOT EXISTS proposals_run_idx ON proposals (run_id, status);
+CREATE TABLE IF NOT EXISTS votes (
+    proposal_id BIGINT NOT NULL REFERENCES proposals(id) ON DELETE CASCADE,
+    run_id BIGINT NOT NULL REFERENCES runs(id),
+    voter TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    vote BOOLEAN NOT NULL,
+    tick BIGINT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (proposal_id, voter));
+CREATE TABLE IF NOT EXISTS sanctions (
+    id BIGSERIAL PRIMARY KEY,
+    run_id BIGINT NOT NULL REFERENCES runs(id),
+    proposal_id BIGINT REFERENCES proposals(id) ON DELETE SET NULL,
+    agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,
+    detail TEXT NOT NULL DEFAULT '',
+    location TEXT,
+    until_tick BIGINT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now());
+CREATE INDEX IF NOT EXISTS sanctions_run_agent_idx ON sanctions (run_id, agent_id);
+SQL
 ```

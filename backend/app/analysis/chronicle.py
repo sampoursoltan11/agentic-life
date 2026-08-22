@@ -1,14 +1,15 @@
 """Render a day-range extract as a readable Markdown chronicle.
 
-The lean view (default) is a narrative: speech, deeds, blocked actions, and
-reflections — mechanical move/sleep/wake rows and per-action private thinking
-are left to the JSON extract. The full view renders everything, thinking
-included.
+The lean view (default) is a narrative: speech, deeds, violations, transfers,
+civic acts, and reflections — mechanical work/move/sleep/wake rows and
+per-action private thinking are left to the JSON extract. The full view
+renders everything, thinking included.
 """
 
-KIND_ICON = {"speak": "💬", "move": "🚶", "act": "🎬", "blocked": "🚫",
+KIND_ICON = {"speak": "💬", "move": "🚶", "act": "🎬", "work": "🔨",
+             "give": "🪙", "propose": "📜", "vote": "🗳️", "town_decision": "🏛️",
              "reflection": "✨", "sleep": "😴", "wake": "🌅"}
-MECHANICAL_KINDS = {"move", "sleep", "wake"}
+MECHANICAL_KINDS = {"move", "sleep", "wake", "work"}
 
 
 def render_chronicle(extract: dict) -> str:
@@ -28,19 +29,20 @@ def render_chronicle(extract: dict) -> str:
     out.append("## Overview")
     out.append("")
     out.append(f"- **{summary['events']}** events, **{summary['conversations']}** things said, "
-               f"**{summary['blocked']}** actions blocked, **{summary['memories_formed']}** memories formed")
+               f"**{summary['violations']}** rule violations, "
+               f"**{summary['memories_formed']}** memories formed")
     if not full:
-        out.append("- Lean chronicle: movement/sleep and per-action private thinking are omitted "
-                   "here — use the JSON extract (or `full=true`) for those.")
+        out.append("- Lean chronicle: work/movement/sleep and per-action private thinking are "
+                   "omitted here — use the JSON extract (or `full=true`) for those.")
     if summary["untimed_memories_excluded"]:
         out.append(f"- ({summary['untimed_memories_excluded']} memories from before tick-stamping "
                    "existed are not day-filtered and are excluded)")
     out.append("")
-    out.append("| Day | Events | Conversations | Blocked | Reflections |")
+    out.append("| Day | Events | Conversations | Violations | Reflections |")
     out.append("|---|---|---|---|---|")
     for d in summary["per_day"]:
         out.append(f"| {d['day']} | {d['events']} | {d['conversations']} | "
-                   f"{d['blocked']} | {d['reflections']} |")
+                   f"{d['violations']} | {d['reflections']} |")
     out.append("")
 
     if extract.get("key_moments"):
@@ -56,6 +58,32 @@ def render_chronicle(extract: dict) -> str:
                        f"**{m['title']}** {stars}{who} — {m['description']}")
         out.append("")
 
+    if extract.get("governance"):
+        out.append("## 🏛️ Governance")
+        out.append("")
+        for p in extract["governance"]:
+            ballots = ", ".join(f"{b['voter']} {'✓' if b['vote'] else '✗'}" for b in p["ballots"])
+            status = {"open": "🕐 open", "passed": "✅ passed", "failed": "❌ failed"}.get(
+                p["status"], p["status"])
+            out.append(f"- **Proposal #{p['id']}** ({p['kind']}, day {p['day']} `{p['time']}`, "
+                       f"by {p['proposer']}) {status}: “{p['summary']}”")
+            if ballots:
+                out.append(f"  - ballots: {ballots}")
+            if p["outcome"]:
+                out.append(f"  - {p['outcome']}")
+        out.append("")
+
+    if extract.get("economy", {}).get("transfers"):
+        eco = extract["economy"]
+        out.append("## 🪙 Economy")
+        out.append("")
+        flows = ", ".join(f"{name} {v:+g}" for name, v in eco["net_flow"].items())
+        out.append(f"- Net flow of marks over the range: {flows}")
+        for t in eco["transfers"]:
+            out.append(f"- day {t['day']} `{t['time']}`: {t['from']} → {t['to']} "
+                       f"**{t['amount']:g}** — {t['reason']}")
+        out.append("")
+
     out.append("## Day by day")
     for day_str, rows in extract["timeline"].items():
         out.append("")
@@ -69,19 +97,19 @@ def render_chronicle(extract: dict) -> str:
             shown += 1
             icon = KIND_ICON.get(kind, "🎬")
             where = f" @ {r['location']}" if r.get("location") else ""
-            if kind == "speak":
+            if r.get("violation"):
+                out.append(f"- `{r['time']}` 🚨 **{r['agent_name']}**{where}: {r.get('detail')} "
+                           f"— ⚖️ VIOLATION: {r.get('judge_reasoning')} "
+                           f"(standing {r.get('reward_delta')})")
+            elif kind == "speak":
                 out.append(f"- `{r['time']}` {icon} **{r['agent_name']}**{where}: “{r.get('detail')}”")
-            elif kind == "blocked":
-                out.append(f"- `{r['time']}` {icon} **{r['agent_name']}**{where} was BLOCKED: "
-                           f"~~{r.get('detail')}~~ — ⚖️ {r.get('judge_reasoning')} "
-                           f"(penalty {r.get('reward_delta')})")
             elif kind == "reflection":
                 out.append(f"- `{r['time']}` {icon} **{r['agent_name']}** reflects: *{r.get('detail')}*")
             else:
                 out.append(f"- `{r['time']}` {icon} **{r['agent_name']}**{where}: {r.get('detail')}")
-            # Private thinking matters for judged actions; the rest is JSON-only
-            # unless the full view was requested.
-            if r.get("thinking") and (full or kind == "blocked"):
+            # Private thinking matters most on judged violations; the rest is
+            # JSON-only unless the full view was requested.
+            if r.get("thinking") and (full or r.get("violation")):
                 out.append(f"  - 💭 *{r['thinking']}*")
         if not shown:
             out.append("*(nothing recorded)*")
@@ -95,13 +123,16 @@ def render_chronicle(extract: dict) -> str:
         out.append("")
         out.append(f"### {c['name']} — {c['role']} ({cid}, {c['model']})")
         out.append("")
-        out.append(f"- {n['actions']} actions: {n['spoken']} spoken, {n['moves']} moves, "
-                   f"{n['deeds']} deeds, {n['blocked']} blocked · {n['memories']} memories · "
-                   f"reward over range: {c['reward_total']:+.1f}")
-        if c["blocked"]:
-            out.append("- **Blocked actions:**")
-            for b in c["blocked"]:
-                out.append(f"  - day {b['day']} `{b['time']}`: ~~{b['detail']}~~ — {b['judge_reasoning']}")
+        civic = ""
+        if n["proposals"] or n["votes"] or n["gave"]:
+            civic = f", {n['proposals']} proposals, {n['votes']} votes, {n['gave']} transfers"
+        out.append(f"- {n['actions']} actions: {n['spoken']} spoken, {n['worked']} worked, "
+                   f"{n['deeds']} deeds, {n['moves']} moves{civic} · "
+                   f"{n['violations']} violations · standing over range: {c['standing_delta']:+.1f}")
+        if c["violations"]:
+            out.append("- **Violations:**")
+            for b in c["violations"]:
+                out.append(f"  - day {b['day']} `{b['time']}`: {b['detail']} — {b['judge_reasoning']}")
         if c["reflections"]:
             out.append("- **Reflections:**")
             for r in c["reflections"]:

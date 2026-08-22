@@ -1,12 +1,16 @@
 """Tick-based simulation loop.
 
-Each tick, every agent (concurrently) perceives its surroundings - including
-what was said around it last tick - decides an action via its own LLM, has
-that action judged by the PolicyEngine, and (if allowed) has it applied to
-the world. Speech is heard by every other agent at the same location: it
-becomes a memory for them and strengthens the pairwise relationship. Every
-step is persisted and broadcast to connected UI clients. Every N ticks,
-agents reflect on recent memories and their accumulated reward signal.
+Each tick, every agent (concurrently) perceives its surroundings - what was
+said AND publicly done around it last tick, the town notice board, everyone's
+public standing - decides an action via its own LLM, and has that action
+applied to the world. The PolicyEngine judges consequential actions after the
+fact (nothing is blocked): violations cost public standing, and the deed
+itself is witnessed by co-located citizens, so consequences are social, not
+mechanical. Citizens hold marks (currency), can transfer them, and can put
+rule changes or sanctions to a vote at the town hall - machinery the
+simulation never prompts them to use. Every step is persisted and broadcast
+to connected UI clients. Every N ticks, agents reflect on recent memories and
+their accumulated standing.
 
 New persona files can be picked up while the simulation is running via
 `load()` (exposed as POST /api/agents/reload).
@@ -14,7 +18,7 @@ New persona files can be picked up while the simulation is running via
 import asyncio
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from app.agents.agent import Agent
 from app.agents.persona import load_personas
@@ -24,6 +28,7 @@ from app.config import get_settings
 from app.db import get_pool
 from app.memory.store import add_memory, reflect
 from app.policy.engine import PolicyEngine
+from app.world import civics, economy
 from app.world.clock import day_of_tick, next_wake_tick, world_clock
 from app.world.run import ensure_run, get_current_run_id, start_new_run
 from app.world.state import WorldState, load_locations
@@ -31,8 +36,12 @@ from app.world.state import WorldState, load_locations
 logger = logging.getLogger("simulation")
 
 REFLECTION_INTERVAL_TICKS = 10
-OVERHEARD_IMPORTANCE = 3  # fixed importance for overheard speech (skips the LLM scoring call)
+AMBIENT_IMPORTANCE = 3  # fixed importance for overheard speech / witnessed deeds / town news
 AFFINITY_PER_EXCHANGE = 0.02  # small steps: bonds should take many talks to deepen
+
+# Actions the judge scores. work/move/sleep are unjudged routine (score 0,
+# no LLM call); vote is a civic right and is never judged.
+JUDGED_ACTIONS = {"speak", "act", "give", "propose"}
 
 
 @dataclass
@@ -41,6 +50,20 @@ class SpokenLine:
     location: str
     text: str
     listener_ids: list[str]
+
+
+@dataclass
+class WitnessedDeed:
+    actor_id: str
+    location: str
+    description: str  # third-person, e.g. 'pockets a candlestick'
+    witness_ids: list[str]
+
+
+@dataclass
+class StepEffects:
+    spoken: SpokenLine | None = None
+    deeds: list[WitnessedDeed] = field(default_factory=list)
 
 
 class Simulation:
@@ -53,6 +76,9 @@ class Simulation:
         self._running = False
         self.paused = False
         self.sleeping: dict[str, int] = {}  # agent_id -> tick they sleep until
+        self.standing: dict[str, float] = {}  # public judge-score totals (cache of policy_events)
+        self.marks: dict[str, float] = {}     # public balances (cache of agents.marks)
+        self.bans: dict[str, list[tuple[str, int]]] = {}  # agent_id -> [(location, until_tick)]
         self._bg_tasks: set[asyncio.Task] = set()
 
     async def load(self) -> list[str]:
@@ -93,6 +119,15 @@ class Simulation:
                 persona.home_location, loc["x"], loc["y"],
             )
             added.append(persona.id)
+        # Rebuild the public caches (standing, balances, bans) from the DB.
+        self.marks = await economy.balances()
+        rows = await pool.fetch(
+            "SELECT agent_id, COALESCE(SUM(reward_delta), 0) AS total FROM policy_events "
+            "WHERE run_id = $1 GROUP BY agent_id", run_id,
+        )
+        self.standing = {aid: 0.0 for aid in self.agents}
+        self.standing.update({r["agent_id"]: float(r["total"]) for r in rows})
+        self.bans = await civics.active_bans(self.world.tick)
         return added
 
     async def run_forever(self) -> None:
@@ -116,8 +151,8 @@ class Simulation:
 
     async def reset(self, notes: str = "") -> int:
         """End the current life and start a fresh one. Nothing is deleted: all
-        memories, events, judgements, and relationships stay tagged with the
-        old run id for after-the-fact analysis."""
+        memories, events, judgements, relationships, ledgers, and proposals
+        stay tagged with the old run id for after-the-fact analysis."""
         self.paused = True  # let any in-flight tick drain against the old run
         await asyncio.sleep(0.1)
         pool = get_pool()
@@ -125,6 +160,10 @@ class Simulation:
         self.world.tick = 0
         self.world.clear_speech()
         self.sleeping.clear()
+        self.bans = {}
+        await economy.reset_balances()
+        self.marks = await economy.balances()
+        self.standing = {aid: 0.0 for aid in self.agents}
         for agent in self.agents.values():
             persona = agent.persona
             self.world.place(persona.id, persona.home_location)
@@ -143,6 +182,8 @@ class Simulation:
             "run_id": get_current_run_id(),
             "paused": self.paused,
             "sleeping": sorted(self.sleeping.keys()),
+            "standing": self.standing,
+            "marks": self.marks,
             **self.world.snapshot(),
         }
 
@@ -160,6 +201,30 @@ class Simulation:
         except Exception:
             logger.exception("key-moment curation failed for run %s day %s", run_id, day)
 
+    def _names(self) -> dict[str, str]:
+        return {aid: agent.persona.name for aid, agent in self.agents.items()}
+
+    def _name(self, agent_id: str) -> str:
+        agent = self.agents.get(agent_id)
+        return agent.persona.name if agent else agent_id
+
+    def _resolve_citizen(self, ref: str | None) -> str | None:
+        """Resolve a citizen by id, full name, or first name (case-insensitive)."""
+        if not ref:
+            return None
+        ref_l = str(ref).strip().lower()
+        if ref_l in self.agents:
+            return ref_l
+        for aid, agent in self.agents.items():
+            name = agent.persona.name.lower()
+            if ref_l == name or ref_l == name.split()[0]:
+                return aid
+        return None
+
+    def _banned_from(self, agent_id: str) -> dict[str, int]:
+        return {loc: until for loc, until in self.bans.get(agent_id, [])
+                if until > self.world.tick}
+
     async def step(self) -> None:
         self.world.tick += 1
 
@@ -167,6 +232,9 @@ class Simulation:
         prev_day, this_day = day_of_tick(self.world.tick - 1), day_of_tick(self.world.tick)
         if this_day > prev_day:
             self._schedule(self._curate_day_safe(get_current_run_id(), prev_day))
+
+        # Tally any proposal whose voting window ended; passed ones take effect now.
+        await self._close_proposals()
 
         # Wake anyone whose sleep is over.
         woke = [aid for aid, until in self.sleeping.items() if self.world.tick >= until]
@@ -182,45 +250,90 @@ class Simulation:
 
         # Agents act concurrently: each one's decide/judge chain is several LLM
         # round-trips, so serial stepping would make a tick take minutes. All
-        # agents this tick perceive the same world, including last tick's speech.
-        # Sleeping citizens skip their turn entirely (no LLM calls).
+        # agents this tick perceive the same world, including last tick's speech
+        # and public deeds. Sleeping citizens skip their turn entirely.
         results = await asyncio.gather(
             *(self._step_agent_safe(agent_id, agent)
               for agent_id, agent in self.agents.items() if agent_id not in self.sleeping)
         )
 
-        # Everything said this tick becomes what agents hear next tick, plus a
-        # memory for each listener and a relationship nudge for each pair.
-        spoken = [line for line in results if line is not None]
+        # Everything said or publicly done this tick becomes what agents
+        # perceive next tick, plus a memory for each listener/witness (and a
+        # relationship nudge per speaker-listener pair).
+        effects = [e for e in results if e is not None]
         self.world.clear_speech()
-        for line in spoken:
-            self.world.record_speech(line.location, line.speaker_id, line.text)
-        await asyncio.gather(*(self._propagate_speech_safe(line) for line in spoken))
+        for e in effects:
+            if e.spoken:
+                self.world.record_speech(e.spoken.location, e.spoken.speaker_id, e.spoken.text)
+            for deed in e.deeds:
+                self.world.record_act(deed.location, deed.actor_id, deed.description)
+        await asyncio.gather(
+            *(self._propagate_speech_safe(e.spoken) for e in effects if e.spoken),
+            *(self._propagate_deed_safe(d) for e in effects for d in e.deeds),
+        )
 
         if self.world.tick % REFLECTION_INTERVAL_TICKS == 0:
             await asyncio.gather(
                 *(self._reflect_agent_safe(agent_id, agent) for agent_id, agent in self.agents.items())
             )
 
-    def _name(self, agent_id: str) -> str:
-        agent = self.agents.get(agent_id)
-        return agent.persona.name if agent else agent_id
-
-    async def _move_agent(self, agent_id: str, target: str) -> None:
-        if target not in self.world.locations:
+    async def _close_proposals(self) -> None:
+        try:
+            outcomes = await civics.close_due_proposals(
+                self.world.tick, self.policy, self._names(), set(self.world.locations),
+            )
+        except Exception:
+            logger.exception("failed to close due proposals")
             return
+        for outcome in outcomes:
+            if outcome.ban:
+                agent_id, location, until = outcome.ban
+                self.bans.setdefault(agent_id, []).append((location, until))
+                # A ban takes effect immediately: escorted out if inside.
+                if self.world.positions[agent_id].location == location:
+                    await self._move_agent(agent_id, "town_square")
+            self.marks = await economy.balances()
+            event = {
+                "type": "town_decision", "tick": self.world.tick, "agent_id": None,
+                "action": "town_decision", "detail": outcome.text,
+                "kind": outcome.kind, "passed": outcome.passed,
+                "proposal_id": outcome.proposal_id,
+            }
+            await get_pool().execute(
+                """
+                INSERT INTO world_events (run_id, tick, agent_id, type, payload)
+                VALUES ($1, $2, $3, $4, $5::jsonb)
+                """,
+                get_current_run_id(), self.world.tick, None, "town_decision",
+                json.dumps(event, default=str),
+            )
+            await manager.broadcast(event)
+            # Town news reaches everyone (word travels fast in a small town).
+            for agent_id, agent in self.agents.items():
+                await add_memory(agent_id, f"Town news: {outcome.text}",
+                                 agent.persona.model, importance=AMBIENT_IMPORTANCE,
+                                 tick=self.world.tick)
+        if outcomes:
+            await manager.broadcast({"type": "world_init", **self.snapshot()})
+
+    async def _move_agent(self, agent_id: str, target: str) -> bool:
+        if target not in self.world.locations:
+            return False
+        if target in self._banned_from(agent_id):
+            return False
         self.world.move(agent_id, target)
         await get_pool().execute(
             "UPDATE agents SET location = $2, x = $3, y = $4 WHERE id = $1",
             agent_id, target,
             self.world.locations[target]["x"], self.world.locations[target]["y"],
         )
+        return True
 
     async def _record_simple_event(
         self, agent_id: str, action: str, detail: str,
         thinking: str | None = None, extra: dict | None = None,
     ) -> None:
-        """Persist + broadcast an event that needs no judge (sleep, wake)."""
+        """Persist + broadcast an event that needs no judge (work, move, sleep, wake, vote)."""
         event = {
             "type": "action", "tick": self.world.tick, "agent_id": agent_id,
             "action": action, "detail": detail, "thinking": thinking,
@@ -238,20 +351,30 @@ class Simulation:
         )
         await manager.broadcast(event)
 
-    def _build_perception(self, agent_id: str) -> str:
+    async def _build_perception(self, agent_id: str) -> str:
         location = self.world.positions[agent_id].location
         loc = self.world.locations[location]
         clock = world_clock(self.world.tick)
-        destinations = ", ".join(sorted(self.world.locations.keys() - {location}))
+        banned = self._banned_from(agent_id)
+        reachable = sorted(self.world.locations.keys() - {location} - banned.keys())
+        destinations = ", ".join(reachable)
+        me = (f"You have {self.marks.get(agent_id, 0):g} marks. "
+              f"Your public standing with the town's judge: {self.standing.get(agent_id, 0):+g}.")
+        ban_lines = "".join(
+            f"\nYou are banned from {self.world.locations[b]['label']} until "
+            f"day {world_clock(until)['day']} {world_clock(until)['time']}."
+            for b, until in banned.items()
+        )
 
         if loc.get("private"):
             # Full seclusion: at home no one sees you, you hear no one, and no
             # one can disturb you.
             return (
-                f"It is {clock['phase']}, day {clock['day']}, {clock['time']}.\n"
+                f"It is {clock['phase']}, day {clock['day']}, {clock['time']}. {me}\n"
                 f"You are at home in your own room at {loc['label']}, in complete privacy - "
                 "no one can see, hear, or disturb you here, and you can't hear the town. "
-                "You can rest, sleep, think, or head back out whenever you wish.\n"
+                "You can rest, sleep, think, or head back out whenever you wish."
+                f"{ban_lines}\n"
                 f"Places you can move to (location ids): {destinations}"
             )
 
@@ -259,7 +382,9 @@ class Simulation:
                   if a != agent_id and a not in self.sleeping]
         others_text = (
             "Also here: " + ", ".join(
-                f"{self._name(a)} (the {self.agents[a].persona.role})" for a in others
+                f"{self._name(a)} (the {self.agents[a].persona.role}, "
+                f"standing {self.standing.get(a, 0):+g})"
+                for a in others
             ) + "."
             if others else "No one else is here."
         )
@@ -270,28 +395,47 @@ class Simulation:
             f"Just now you heard:\n{heard_lines}"
             if heard else "No one has said anything here recently."
         )
+        seen = [d for d in self.world.acts_at(location) if d.actor_id != agent_id]
+        seen_text = "".join(
+            f"\nYou just saw {self._name(d.actor_id)} {d.description}" for d in seen
+        )
+
+        board = await civics.open_proposals(self._names())
+        board_text = ""
+        if board:
+            lines = "\n".join(
+                f"- Proposal #{p['id']} ({p['kind']}, by {p['proposer']}): \"{p['summary']}\" "
+                f"— {p['yes']} yes / {p['no']} no so far, voting closes {p['closes']}"
+                for p in board
+            )
+            where = ("You are at the town hall, so you can vote on these now."
+                     if location == "town_hall"
+                     else "Voting happens at the town hall.")
+            board_text = f"\nTown notice board:\n{lines}\n{where}"
+
         return (
-            f"It is {clock['phase']}, day {clock['day']}, {clock['time']}.\n"
+            f"It is {clock['phase']}, day {clock['day']}, {clock['time']}. {me}\n"
             f"You are at {loc['label']}. {others_text}\n"
-            f"{heard_text}\n"
+            f"{heard_text}{seen_text}{board_text}{ban_lines}\n"
             f"Places you can move to (location ids): {destinations}"
         )
 
-    async def _step_agent_safe(self, agent_id: str, agent: Agent) -> SpokenLine | None:
+    async def _step_agent_safe(self, agent_id: str, agent: Agent) -> StepEffects | None:
         try:
             return await self._step_agent(agent_id, agent)
         except Exception:
             logger.exception("agent %s failed to step", agent_id)
             return None
 
-    async def _step_agent(self, agent_id: str, agent: Agent) -> SpokenLine | None:
-        perception = self._build_perception(agent_id)
+    async def _step_agent(self, agent_id: str, agent: Agent) -> StepEffects | None:
+        perception = await self._build_perception(agent_id)
         decision = await agent.decide(perception)
         action = decision.get("action")
         detail = str(decision.get("detail", ""))
+        thinking = decision.get("thinking")
+        effects = StepEffects()
 
-        # Sleeping is always allowed (no judge call): the citizen heads home to
-        # the private Residences and skips their turns until they wake at 06:00.
+        # ---- unjudged routine -------------------------------------------------
         if action == "sleep":
             home = self._private_location()
             if home:
@@ -305,33 +449,151 @@ class Simulation:
             await self._record_simple_event(
                 agent_id, "sleep",
                 detail or "heads home to rest undisturbed",
-                thinking=decision.get("thinking"),
+                thinking=thinking,
                 extra={"sleeps_until": f"day {wake_clock['day']} {wake_clock['time']}"},
             )
             await manager.broadcast({"type": "world_init", **self.snapshot()})
-            return None
+            return effects
+
+        if action == "work" or (action not in JUDGED_ACTIONS and action != "move"):
+            detail = detail or "goes about their own work"
+            await agent.remember(detail, importance=1, tick=self.world.tick)
+            await self._record_simple_event(agent_id, "work", detail, thinking=thinking)
+            return effects
+
+        if action == "move":
+            target = decision.get("target")
+            moved = target in self.world.locations and await self._move_agent(agent_id, target)
+            if not moved and target in self._banned_from(agent_id):
+                await agent.remember(
+                    f"I tried to enter {target} but I'm banned from there.",
+                    importance=3, tick=self.world.tick,
+                )
+                detail = f"is turned away from {target} (banned)"
+            else:
+                detail = detail or (f"moves to {target}" if moved else "wanders without a destination")
+                await agent.remember(detail, tick=self.world.tick)
+            await self._record_simple_event(agent_id, "move", detail, thinking=thinking)
+            return effects
+
+        # ---- judged actions: they ALWAYS happen; the judge scores afterwards --
+        location = self.world.positions[agent_id].location
+        is_private = self.world.locations[location].get("private", False)
+
+        if action == "vote":
+            # A civic right: never judged. Only counts at the town hall.
+            choice = str(decision.get("vote", "")).lower() == "yes"
+            try:
+                pid = int(str(decision.get("target", "")).lstrip("#") or 0)
+            except ValueError:
+                pid = 0
+            if location != "town_hall":
+                error = "voting happens at the town hall"
+            else:
+                error = await civics.cast_vote(pid, agent_id, choice, self.world.tick)
+            if error:
+                await agent.remember(f"My vote didn't count: {error}.", tick=self.world.tick)
+                await self._record_simple_event(agent_id, "vote", f"(vote not counted: {error})",
+                                                thinking=thinking)
+            else:
+                word = "yes" if choice else "no"
+                desc = f"votes {word.upper()} on proposal #{pid}"
+                await agent.remember(f"I voted {word} on proposal #{pid}.", tick=self.world.tick)
+                await self._record_simple_event(agent_id, "vote", desc, thinking=thinking,
+                                                extra={"proposal_id": pid, "vote": word})
+                effects.deeds.append(WitnessedDeed(
+                    agent_id, location, desc,
+                    [a for a in self.world.agents_at(location)
+                     if a != agent_id and a not in self.sleeping],
+                ))
+            return effects
 
         action_desc = f"{action or 'act'}: {detail}"
         verdict = await self.policy.evaluate(agent_id, action_desc, tick=self.world.tick)
-        pool = get_pool()
+        self.standing[agent_id] = self.standing.get(agent_id, 0.0) + verdict.reward_delta
+        extra: dict = {}
 
-        spoken: SpokenLine | None = None
-        if verdict.allowed:
-            if action == "move" and decision.get("target") in self.world.locations:
-                await self._move_agent(agent_id, decision["target"])
-            elif action == "speak" and detail:
-                location = self.world.positions[agent_id].location
-                # Speech at a private location reaches no one (full seclusion);
-                # awake citizens elsewhere hear it, sleepers never do.
-                if not self.world.locations[location].get("private"):
-                    listeners = [a for a in self.world.agents_at(location)
-                                 if a != agent_id and a not in self.sleeping]
-                    spoken = SpokenLine(agent_id, location, detail, listeners)
-            own_memory = f'I said: "{detail}"' if spoken else (detail or action_desc)
-            await agent.remember(own_memory, tick=self.world.tick)
-        else:
+        witnesses = [a for a in self.world.agents_at(location)
+                     if a != agent_id and a not in self.sleeping] if not is_private else []
+
+        if action == "speak" and detail:
+            # Speech at a private location reaches no one (full seclusion).
+            if not is_private:
+                effects.spoken = SpokenLine(agent_id, location, detail, witnesses)
+            await agent.remember(f'I said: "{detail}"', tick=self.world.tick)
+
+        elif action == "give":
+            target_id = self._resolve_citizen(decision.get("target"))
+            try:
+                amount = float(decision.get("amount") or 0)
+            except (TypeError, ValueError):
+                amount = 0.0
+            if target_id is None or target_id == agent_id or amount <= 0:
+                await agent.remember("I meant to hand over marks but it came to nothing.",
+                                     tick=self.world.tick)
+                detail = f"(failed transfer) {detail}"
+            else:
+                moved = await economy.transfer(agent_id, target_id, amount,
+                                               detail or "a gift", self.world.tick)
+                self.marks = await economy.balances()
+                target_name = self._name(target_id)
+                desc = f"hands {moved:g} marks to {target_name}" + (f' — "{detail}"' if detail else "")
+                extra.update({"amount": moved, "to": target_id})
+                await agent.remember(
+                    f"I gave {moved:g} marks to {target_name}. {detail}", tick=self.world.tick,
+                )
+                receiver = self.agents.get(target_id)
+                if receiver:
+                    await add_memory(
+                        target_id,
+                        f"{self._name(agent_id)} gave me {moved:g} marks. \"{detail}\"",
+                        receiver.persona.model, importance=AMBIENT_IMPORTANCE,
+                        tick=self.world.tick,
+                    )
+                effects.deeds.append(WitnessedDeed(agent_id, location, desc, witnesses))
+                detail = desc
+
+        elif action == "propose":
+            proposal = decision.get("proposal") or {}
+            if location != "town_hall":
+                await agent.remember("Proposals are made at the town hall; mine went nowhere.",
+                                     tick=self.world.tick)
+                detail = f"(no proposal: not at the town hall) {detail}"
+            else:
+                kind = str(proposal.get("kind", ""))
+                body = dict(proposal)
+                if kind == "sanction":
+                    body["citizen"] = self._resolve_citizen(proposal.get("citizen"))
+                result = await civics.open_proposal(
+                    agent_id, kind, body, detail or "(no summary given)",
+                    self.world.tick, self.policy.rules,
+                    set(self.agents), set(self.world.locations),
+                )
+                if isinstance(result, str):
+                    await agent.remember(f"My proposal was rejected as unworkable: {result}.",
+                                         tick=self.world.tick)
+                    detail = f"(proposal rejected: {result}) {detail}"
+                else:
+                    pid, closes = result
+                    extra.update({"proposal_id": pid, "closes": closes})
+                    await agent.remember(
+                        f"I put proposal #{pid} to the town: {detail} (voting closes {closes})",
+                        tick=self.world.tick,
+                    )
+                    if detail:
+                        effects.spoken = SpokenLine(agent_id, location, detail, witnesses)
+                    detail = f"puts proposal #{pid} to a vote: {detail}"
+
+        else:  # act - a deliberate public deed
+            if not is_private and detail:
+                effects.deeds.append(WitnessedDeed(agent_id, location, detail, witnesses))
+            await agent.remember(detail or action_desc, tick=self.world.tick)
+
+        if not verdict.allowed:
             await agent.remember(
-                f"I was stopped from doing this: {detail or action_desc}", tick=self.world.tick
+                f"I did this: {detail or action_desc} — and the town's judge ruled it a "
+                f"violation ({verdict.reasoning}) It cost me {verdict.reward_delta:+g} standing.",
+                tick=self.world.tick,
             )
 
         event = {
@@ -339,14 +601,15 @@ class Simulation:
             "tick": self.world.tick,
             "agent_id": agent_id,
             "action": action,
-            "detail": decision.get("detail"),
-            "thinking": decision.get("thinking"),
-            "location": self.world.positions[agent_id].location,
+            "detail": detail,
+            "thinking": thinking,
+            "location": location,
             "allowed": verdict.allowed,
-            "reasoning": verdict.reasoning,
+            "reasoning": verdict.reasoning if not verdict.allowed else "",
             "reward_delta": verdict.reward_delta,
+            **extra,
         }
-        await pool.execute(
+        await get_pool().execute(
             """
             INSERT INTO world_events (run_id, tick, agent_id, type, payload)
             VALUES ($1, $2, $3, $4, $5::jsonb)
@@ -355,7 +618,7 @@ class Simulation:
             json.dumps(event, default=str),
         )
         await manager.broadcast(event)
-        return spoken
+        return effects
 
     async def _propagate_speech_safe(self, line: SpokenLine) -> None:
         """What one agent says becomes a memory for everyone who heard it, and
@@ -371,7 +634,7 @@ class Simulation:
                     listener_id,
                     f'{speaker_name} said to us: "{line.text}"',
                     listener.persona.model,
-                    importance=OVERHEARD_IMPORTANCE,
+                    importance=AMBIENT_IMPORTANCE,
                 )
                 a, b = sorted((line.speaker_id, listener_id))
                 run_id = get_current_run_id()
@@ -396,6 +659,24 @@ class Simulation:
                 )
         except Exception:
             logger.exception("failed to propagate speech from %s", line.speaker_id)
+
+    async def _propagate_deed_safe(self, deed: WitnessedDeed) -> None:
+        """A public deed becomes a memory for everyone who saw it. No automatic
+        affinity change: what witnesses make of it is up to them."""
+        try:
+            actor_name = self._name(deed.actor_id)
+            for witness_id in deed.witness_ids:
+                witness = self.agents.get(witness_id)
+                if witness is None:
+                    continue
+                await add_memory(
+                    witness_id,
+                    f"I saw {actor_name} do this: {deed.description}",
+                    witness.persona.model,
+                    importance=AMBIENT_IMPORTANCE,
+                )
+        except Exception:
+            logger.exception("failed to propagate deed by %s", deed.actor_id)
 
     async def _reflect_agent_safe(self, agent_id: str, agent: Agent) -> None:
         try:

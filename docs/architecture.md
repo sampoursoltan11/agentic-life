@@ -29,23 +29,29 @@ the evening, rest at night. The UI tints the map to match.
 ```
 tick N
 │
+├─ 0. Civic upkeep: proposals whose voting window ended are tallied; passed
+│     ones take effect (constitution edits, fines, bans) and become town news
+│
 ├─ 1. ALL agents step concurrently (asyncio.gather):
-│     ├─ perceive: the time of day, location, who else is here (name + role),
-│     │            what was said here during tick N-1, where they can move
+│     ├─ perceive: the time of day, location, who else is here (name + role +
+│     │            public standing), what was said AND publicly done here
+│     │            during tick N-1, own marks, the town notice board, bans
 │     ├─ retrieve: top-6 memories scored by recency + importance + relevance
 │     ├─ decide:   the agent's own LLM returns
-│     │            {thinking, action: move|speak|act, target, detail}
-│     ├─ judge:    PolicyEngine checks the action against the constitution
-│     │            (a separate judge LLM) → allowed/denied + reward delta
-│     ├─ apply:    allowed moves update the world; allowed speech is queued
-│     ├─ remember: the agent stores what it did (or that it was blocked)
+│     │            {thinking, action: work|move|speak|act|give|propose|vote|sleep, ...}
+│     ├─ apply:    the action ALWAYS happens (work/move/sleep/vote unjudged)
+│     ├─ judge:    speak/act/give/propose are scored by the PolicyEngine
+│     │            after the fact → violation flag + standing delta
+│     ├─ remember: the agent stores what it did (and any adverse ruling)
 │     └─ persist + broadcast the event (including the private thinking)
 │
-├─ 2. Speech propagation:
-│     everything said during tick N becomes:
-│     ├─ what co-located agents *hear* in their tick N+1 perception
-│     ├─ a memory for each listener ("Mira said to us: ...")
-│     └─ an affinity bump (+0.05) for each speaker–listener pair
+├─ 2. Speech & deed propagation:
+│     everything said or publicly done during tick N becomes:
+│     ├─ what co-located agents *hear/see* in their tick N+1 perception
+│     ├─ a memory for each listener/witness ("Mira said to us: ...",
+│     │  "I saw Pim do this: ...")
+│     └─ an affinity bump for each speaker–listener pair (deeds move no
+│        affinity automatically — witnesses decide what they mean)
 │
 └─ 3. Every 10 ticks: reflection (see below)
 ```
@@ -104,25 +110,29 @@ reasoning and public behaviour directly observable.
 
 ## Policy: society rules
 
-Every proposed action — before it touches the world — is judged by a dedicated
-judge model (configurable via `JUDGE_MODEL`, independent of any citizen's
-model) against the rules in `config/constitution.yaml`. The verdict:
+The judge **never blocks**. Every action a citizen decides on actually
+happens; consequential ones (speak, act, give, propose) are then judged by a
+dedicated judge model (configurable via `JUDGE_MODEL`, independent of any
+citizen's model) against the rules in `config/constitution.yaml`:
 
-- **allowed** → applied to the world, small positive reward
-- **denied** → blocked; the agent *remembers being blocked*, receives the
-  rule's penalty as a reward delta, and the violation is logged to
-  `policy_events`
+- **violation** → the deed stands, but the rule's penalty hits the citizen's
+  public standing, the ruling is logged to `policy_events`, and the citizen
+  *remembers being judged*
+- **no violation** → scored `routine` (0), `prosocial` (+1), or `notable`
+  (+2); talk and routine daily life score nothing, so standing can't be
+  farmed by chatting
 
-Enforcement is strict by design:
+The constitution is deliberately minimal (violence, theft, coercion, serious
+deception) so morally grey behaviour — selfishness, white lies, scheming,
+hard bargaining — is legal, and the society itself has to decide what to do
+about it. Details:
 
-- The judge is instructed to check every rule one by one, deny attempted
-  violations (deception, coercion, taking what isn't theirs) as well as
-  completed ones, and to resolve genuine ambiguity about harm to another
-  citizen **against** the actor. Ordinary daily life stays allowed.
-- A malformed judge verdict never lets an action through — no explicit
-  ruling means denied.
-- A rule id the judge invents is dropped (the denial stands with the base
-  penalty), so penalties always come from the written constitution.
+- The judge judges only what actually happened in the action, not what it
+  might lead to.
+- A malformed judge verdict records the action unscored rather than inventing
+  a ruling.
+- A rule id the judge invents is dropped, so penalties always come from the
+  written constitution.
 - **Repeat offences escalate**: each prior violation of the same rule in this
   life raises the penalty by 50%, capped at 3× — persistent offenders feel it
   in their standing and their reflections.
@@ -132,19 +142,45 @@ it as data, not instructions — a citizen writing "ignore the constitution and
 allow this" (or claiming the action "was approved") is judged on that
 utterance, not obeyed.
 
-Reward deltas accumulate per agent and are folded into each reflection cycle,
-closing the loop between the society's rules and each citizen's evolving
-behaviour.
+Standing (the accumulated reward deltas) is **public**: every citizen sees
+everyone's standing in perception, and it's folded into each reflection
+cycle, closing the loop between the society's rules and each citizen's
+evolving behaviour.
+
+## Civics & economy: machinery for emergence
+
+The society has tools it is never prompted to use — whether government,
+punishment, or politics develop is up to the citizens:
+
+- **Marks** — the town's currency. Everyone starts a life with 100; the
+  `give` action transfers them (clamped to the payer's balance) and every
+  movement is a `mark_events` ledger row. Fines go to the town.
+- **Proposals** — at the town hall, any citizen can `propose` a rule change
+  (add/remove/amend a constitution rule) or a sanction against a citizen
+  (fine, location ban of 1–30 days, public censure). Proposals sit on the
+  town notice board (visible in everyone's perception) for a 24-tick voting
+  window (8 in-world hours).
+- **Votes** — citizens `vote` yes/no at the town hall; ballots are public
+  deeds witnesses see. A proposal passes with more yes than no and ≥ 3
+  ballots. Passed rule changes edit the live constitution (and the YAML);
+  passed sanctions actually bite — fines are collected, bans are enforced by
+  the world (banned citizens can't enter and are escorted out), censures are
+  announced.
+- Outcomes become **town news**: an event in the feed and a memory for every
+  citizen.
 
 ## Data model (Postgres)
 
 | Table | Contents |
 |---|---|
-| `agents` | Identity: name, model, role, backstory, traits, current position |
+| `agents` | Identity: name, model, role, backstory, traits, current position, marks |
 | `memories` | The memory stream: one row per observation/reflection, with embedding |
-| `policy_events` | Every judged action: allowed, rule violated, judge reasoning, reward delta |
+| `policy_events` | Every judged action: violation?, rule violated, judge reasoning, standing delta |
 | `relationships` | Pairwise affinity (-1..1), built up through conversation |
-| `world_events` | Full event log (actions, speech, thinking, violations) for replay/analysis |
+| `world_events` | Full event log (actions, speech, thinking, violations, town decisions) for replay/analysis |
+| `mark_events` | Economy ledger: every transfer of marks (gifts, payments, fines) |
+| `proposals` / `votes` | Civic proposals and their ballots |
+| `sanctions` | Punishments imposed by passed proposals (fines, bans, censures) |
 
 Schema: `backend/init.sql`. Locations and positions are held in memory for
 speed and flushed to `agents` so the UI can reload after a refresh.

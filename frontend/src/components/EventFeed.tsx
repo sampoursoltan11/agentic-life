@@ -11,12 +11,16 @@ const ACTION_ICON: Record<string, string> = {
   move: "🚶",
   speak: "💬",
   act: "🎬",
+  work: "🔨",
+  give: "🪙",
+  propose: "📜",
+  vote: "🗳️",
   sleep: "😴",
   wake: "🌅",
 };
 
-function byId(agents: Agent[], id: string): Agent | undefined {
-  return agents.find((a) => a.id === id);
+function byId(agents: Agent[], id: string | null): Agent | undefined {
+  return id === null ? undefined : agents.find((a) => a.id === id);
 }
 
 export function EventFeed({ events, agents, onSelectAgent }: Props) {
@@ -34,6 +38,26 @@ export function EventFeed({ events, agents, onSelectAgent }: Props) {
               </li>
             ) : null;
           lastTick = event.tick;
+
+          if (event.type === "town_decision") {
+            return (
+              <Fragment key={i}>
+                {tickHeader}
+                <li className="entry entry--town">
+                  <span className="entry__avatar">🏛️</span>
+                  <div className="entry__body">
+                    <div className="entry__head">
+                      <strong>The town</strong>
+                      <span className={`chip ${event.passed ? "chip--passed" : "chip--failed"}`}>
+                        {event.passed ? "✅ passed" : "❌ failed"}
+                      </span>
+                    </div>
+                    <div className="entry__text">{event.detail}</div>
+                  </div>
+                </li>
+              </Fragment>
+            );
+          }
 
           if (event.type === "reflection") {
             return (
@@ -55,7 +79,7 @@ export function EventFeed({ events, agents, onSelectAgent }: Props) {
             );
           }
 
-          const icon = event.allowed ? (ACTION_ICON[event.action] ?? "🎬") : "🚫";
+          const icon = ACTION_ICON[event.action] ?? "🎬";
           return (
             <Fragment key={i}>
               {tickHeader}
@@ -67,11 +91,11 @@ export function EventFeed({ events, agents, onSelectAgent }: Props) {
                   <div className="entry__head">
                     <strong>{agent?.name ?? event.agent_id}</strong>
                     <span className={`chip ${event.allowed ? `chip--${event.action}` : "chip--blocked"}`}>
-                      {icon} {event.allowed ? event.action : "blocked"}
+                      {event.allowed ? `${icon} ${event.action}` : `🚨 ${event.action} · violation`}
                     </span>
                   </div>
                   <div className="entry__text">
-                    {event.action === "speak" && event.allowed ? `“${event.detail}”` : event.detail}
+                    {event.action === "speak" ? `“${event.detail}”` : event.detail}
                   </div>
                   {event.thinking && (
                     <details className="entry__thinking">
@@ -80,7 +104,10 @@ export function EventFeed({ events, agents, onSelectAgent }: Props) {
                     </details>
                   )}
                   {!event.allowed && (
-                    <div className="entry__verdict">⚖️ {event.reasoning}</div>
+                    <div className="entry__verdict">
+                      ⚖️ {event.reasoning} ({event.reward_delta > 0 ? "+" : ""}
+                      {event.reward_delta} standing)
+                    </div>
                   )}
                 </div>
               </li>

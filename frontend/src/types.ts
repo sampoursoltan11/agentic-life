@@ -43,9 +43,23 @@ export type ActionMessage = {
   detail: string;
   thinking?: string | null;
   location: string;
-  allowed: boolean;
+  allowed: boolean; // false = judged a violation (the action still happened)
   reasoning: string;
   reward_delta: number;
+  amount?: number; // give
+  proposal_id?: number; // propose / vote
+  vote?: "yes" | "no"; // vote
+};
+
+export type TownDecisionMessage = {
+  type: "town_decision";
+  tick: number;
+  agent_id: null;
+  action: "town_decision";
+  detail: string;
+  kind: "rule" | "sanction";
+  passed: boolean;
+  proposal_id: number;
 };
 
 export type ReflectionMessage = {
@@ -55,10 +69,15 @@ export type ReflectionMessage = {
   content: string;
 };
 
-export type WorldMessage = WorldInitMessage | ActionMessage | ReflectionMessage | SimStateMessage;
+export type WorldMessage =
+  | WorldInitMessage
+  | ActionMessage
+  | ReflectionMessage
+  | SimStateMessage
+  | TownDecisionMessage;
 
 /** Messages that appear in the event feed (world_init is state, not an event). */
-export type WorldEvent = ActionMessage | ReflectionMessage;
+export type WorldEvent = ActionMessage | ReflectionMessage | TownDecisionMessage;
 
 export type Agent = {
   id: string;
@@ -70,6 +89,8 @@ export type Agent = {
   traits: string[];
   goals: string[];
   location: string;
+  marks?: number;
+  standing?: number;
 };
 
 export type Relationship = {

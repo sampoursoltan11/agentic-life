@@ -37,6 +37,12 @@ class Utterance:
 
 
 @dataclass
+class WitnessedAct:
+    actor_id: str
+    description: str
+
+
+@dataclass
 class WorldState:
     locations: dict[str, dict] = field(default_factory=dict)
     tick: int = 0
@@ -45,6 +51,11 @@ class WorldState:
     # this at the start of the next tick, which is what makes conversations
     # possible under simultaneous (concurrent) stepping.
     last_speech: dict[str, list[Utterance]] = field(default_factory=dict)
+    # Public deeds (acts, transfers) done at each location last tick: co-located
+    # citizens see them next tick, the same way they hear speech. This is what
+    # makes social consequences possible - a theft in front of witnesses is
+    # actually witnessed.
+    last_acts: dict[str, list[WitnessedAct]] = field(default_factory=dict)
 
     def place(self, agent_id: str, location: str) -> None:
         self.positions[agent_id] = AgentPosition(agent_id=agent_id, location=location)
@@ -63,8 +74,15 @@ class WorldState:
     def speech_at(self, location: str) -> list[Utterance]:
         return self.last_speech.get(location, [])
 
+    def record_act(self, location: str, actor_id: str, description: str) -> None:
+        self.last_acts.setdefault(location, []).append(WitnessedAct(actor_id, description))
+
+    def acts_at(self, location: str) -> list[WitnessedAct]:
+        return self.last_acts.get(location, [])
+
     def clear_speech(self) -> None:
         self.last_speech = {}
+        self.last_acts = {}
 
     def snapshot(self) -> dict:
         return {
